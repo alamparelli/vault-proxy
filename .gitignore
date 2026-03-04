@@ -1,0 +1,23 @@
+# Binaries
+vault-server
+vault-cli
+*.exe
+
+# Vault data (never commit secrets)
+*.enc
+vault-data/
+
+# Session files
+.vault-proxy/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test
+coverage.out
