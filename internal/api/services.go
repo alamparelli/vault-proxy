@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -101,6 +102,9 @@ func (s *Server) validateAuthType(svc *vault.Service) error {
 		if svc.Auth.ClientID == "" || svc.Auth.ClientSecret == "" || svc.Auth.TokenURL == "" || svc.Auth.RefreshToken == "" {
 			return fmt.Errorf("oauth2_client requires client_id, client_secret, token_url, and refresh_token")
 		}
+		if err := validateBaseURL(svc.Auth.TokenURL, svc.TLSSkipVerify); err != nil {
+			return fmt.Errorf("invalid token_url: %w", err)
+		}
 	case "service_account":
 		if svc.Auth.FileRef == "" {
 			return fmt.Errorf("service_account requires file_ref")
@@ -108,6 +112,11 @@ func (s *Server) validateAuthType(svc *vault.Service) error {
 		// Validate file exists in store
 		if _, err := s.store.GetFile(svc.Auth.FileRef); err != nil {
 			return fmt.Errorf("file_ref %q: %w", svc.Auth.FileRef, err)
+		}
+		if svc.Auth.SATokenURL != "" {
+			if err := validateBaseURL(svc.Auth.SATokenURL, svc.TLSSkipVerify); err != nil {
+				return fmt.Errorf("invalid sa_token_url: %w", err)
+			}
 		}
 	default:
 		return fmt.Errorf("unsupported auth type: %s", svc.Auth.Type)
@@ -131,8 +140,12 @@ func validateBaseURL(rawURL string, allowPrivate bool) error {
 		if u.Scheme != "https" && u.Scheme != "http" {
 			return fmt.Errorf("base_url must use HTTP or HTTPS")
 		}
-		// Still block cloud metadata endpoints even for private services
+		// Block well-known cloud metadata hostnames
 		host := u.Hostname()
+		if host == "metadata.google.internal" || host == "metadata" {
+			return fmt.Errorf("base_url must not target cloud metadata services")
+		}
+		// Still block cloud metadata endpoints even for private services
 		ips, err := net.LookupIP(host)
 		if err == nil {
 			for _, ip := range ips {
@@ -141,6 +154,7 @@ func validateBaseURL(rawURL string, allowPrivate bool) error {
 				}
 			}
 		}
+		log.Printf("WARNING: URL validated with tls_skip_verify=true (SSRF protections relaxed): %s", rawURL)
 		return nil
 	}
 

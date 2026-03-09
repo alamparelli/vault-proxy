@@ -114,7 +114,7 @@ func (s *Server) proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		log.Printf("proxy %s %s %s -> error: %v (%s) token=%s", r.Method, serviceName, apiPath, err, duration, tokenID)
-		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadGateway)
+		http.Error(w, `{"error":"upstream request failed"}`, http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
