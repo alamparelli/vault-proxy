@@ -93,6 +93,16 @@ func validateBaseURL(rawURL string, allowPrivate bool) error {
 		if u.Scheme != "https" && u.Scheme != "http" {
 			return fmt.Errorf("base_url must use HTTP or HTTPS")
 		}
+		// Still block cloud metadata endpoints even for private services
+		host := u.Hostname()
+		ips, err := net.LookupIP(host)
+		if err == nil {
+			for _, ip := range ips {
+				if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+					return fmt.Errorf("base_url must not resolve to link-local (metadata) IPs")
+				}
+			}
+		}
 		return nil
 	}
 

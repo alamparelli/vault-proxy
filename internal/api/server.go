@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -26,6 +28,10 @@ type Server struct {
 	tokens *TokenStore
 	mux    *http.ServeMux
 
+	// Reusable HTTP clients for proxy (one per TLS mode)
+	proxyClient         *http.Client
+	proxyClientInsecure *http.Client
+
 	// Brute-force protection
 	unlockMu       sync.Mutex
 	unlockFailures int
@@ -34,10 +40,26 @@ type Server struct {
 
 // NewServer creates a new API server.
 func NewServer(store *vault.Store, tokenTTL time.Duration) *Server {
+	noRedirect := func(req *http.Request, via []*http.Request) error {
+		return errors.New("redirects disabled for security")
+	}
+
+	insecureTransport := http.DefaultTransport.(*http.Transport).Clone()
+	insecureTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+
 	s := &Server{
 		store:  store,
 		tokens: NewTokenStore(tokenTTL),
 		mux:    http.NewServeMux(),
+		proxyClient: &http.Client{
+			Timeout:       30 * time.Second,
+			CheckRedirect: noRedirect,
+		},
+		proxyClientInsecure: &http.Client{
+			Timeout:       30 * time.Second,
+			Transport:     insecureTransport,
+			CheckRedirect: noRedirect,
+		},
 	}
 	s.routes()
 	return s

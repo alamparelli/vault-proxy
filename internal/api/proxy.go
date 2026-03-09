@@ -1,9 +1,7 @@
 package api
 
 import (
-	"crypto/tls"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -95,17 +93,10 @@ func (s *Server) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send request — disable redirects to prevent SSRF via 302
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// Pick pre-built client (reused across requests, no per-request allocation)
+	client := s.proxyClient
 	if svc.TLSSkipVerify {
-		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-	}
-	client := &http.Client{
-		Timeout:   defaultTimeout,
-		Transport: transport,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return errors.New("redirects disabled for security")
-		},
+		client = s.proxyClientInsecure
 	}
 	start := time.Now()
 	resp, err := client.Do(outReq)
