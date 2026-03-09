@@ -96,7 +96,7 @@ func (c *Client) Lock() error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return readError(resp)
 	}
