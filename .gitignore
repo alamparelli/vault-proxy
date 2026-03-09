@@ -1,6 +1,6 @@
-# Binaries
-vault-server
-vault-cli
+# Binaries (root-level only)
+/vault-server
+/vault-cli
 *.exe
 
 # Vault data (never commit secrets)

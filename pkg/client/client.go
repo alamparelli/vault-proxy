@@ -1,3 +1,5 @@
+// Package client is a portable HTTP client for vault-server.
+// Any Go project can import this — no internal dependencies.
 package client
 
 import (
@@ -9,8 +11,6 @@ import (
 	"os"
 	"strings"
 	"time"
-
-	pub "github.com/alessandrolamparelli/vault-proxy/pkg/client"
 )
 
 const (
@@ -104,7 +104,7 @@ func (c *Client) Lock() error {
 }
 
 // ListServices returns all configured services (no secrets).
-func (c *Client) ListServices() ([]pub.ServiceInfo, error) {
+func (c *Client) ListServices() ([]ServiceInfo, error) {
 	resp, err := c.do("GET", "/services", nil)
 	if err != nil {
 		return nil, err
@@ -115,11 +115,51 @@ func (c *Client) ListServices() ([]pub.ServiceInfo, error) {
 		return nil, readError(resp)
 	}
 
-	var services []pub.ServiceInfo
+	var services []ServiceInfo
 	if err := json.NewDecoder(resp.Body).Decode(&services); err != nil {
 		return nil, err
 	}
 	return services, nil
+}
+
+// AddService creates or updates a service. The payload is raw JSON
+// matching vault-server's POST /services schema.
+func (c *Client) AddService(jsonPayload io.Reader) error {
+	resp, err := c.do("POST", "/services", jsonPayload)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return readError(resp)
+	}
+	return nil
+}
+
+// RemoveService deletes a service by name.
+func (c *Client) RemoveService(name string) error {
+	resp, err := c.do("DELETE", "/services/"+name, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return readError(resp)
+	}
+	return nil
+}
+
+// TestService tests connectivity of a service by proxying a GET to its base URL.
+func (c *Client) TestService(name string) error {
+	resp, err := c.do("GET", "/proxy/"+name+"/", nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 500 {
+		return readError(resp)
+	}
+	return nil
 }
 
 // CreateToken creates a new token with the given scope.
@@ -142,6 +182,38 @@ func (c *Client) CreateToken(scope string) (string, error) {
 		return "", err
 	}
 	return token.ID, nil
+}
+
+// ListTokens returns active tokens (no secret material).
+func (c *Client) ListTokens() ([]TokenInfo, error) {
+	resp, err := c.do("GET", "/tokens", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+
+	var tokens []TokenInfo
+	if err := json.NewDecoder(resp.Body).Decode(&tokens); err != nil {
+		return nil, err
+	}
+	return tokens, nil
+}
+
+// RevokeToken revokes a token by ID.
+func (c *Client) RevokeToken(id string) error {
+	resp, err := c.do("DELETE", "/tokens/"+id, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return readError(resp)
+	}
+	return nil
 }
 
 // Proxy sends an HTTP request through the vault proxy.
