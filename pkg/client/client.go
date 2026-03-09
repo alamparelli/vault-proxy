@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -221,6 +223,91 @@ func (c *Client) RevokeToken(id string) error {
 func (c *Client) Proxy(service, method, path string, body io.Reader) (*http.Response, error) {
 	endpoint := fmt.Sprintf("/proxy/%s/%s", service, strings.TrimPrefix(path, "/"))
 	return c.do(method, endpoint, body)
+}
+
+// UploadFile uploads a file to the vault.
+func (c *Client) UploadFile(name, filePath string) error {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("read file: %w", err)
+	}
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	if err := w.WriteField("name", name); err != nil {
+		return err
+	}
+	part, err := w.CreateFormFile("file", filepath.Base(filePath))
+	if err != nil {
+		return err
+	}
+	if _, err := part.Write(data); err != nil {
+		return err
+	}
+	w.Close()
+
+	req, err := http.NewRequest("POST", c.Addr+"/files", &buf)
+	if err != nil {
+		return err
+	}
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return readError(resp)
+	}
+	return nil
+}
+
+// ListFiles returns info for all stored files.
+func (c *Client) ListFiles() ([]FileInfo, error) {
+	resp, err := c.do("GET", "/files", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+
+	var files []FileInfo
+	if err := json.NewDecoder(resp.Body).Decode(&files); err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
+// GetFile downloads a file's raw bytes.
+func (c *Client) GetFile(name string) ([]byte, error) {
+	resp, err := c.do("GET", "/files/"+name, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	return io.ReadAll(resp.Body)
+}
+
+// DeleteFile removes a file from the vault.
+func (c *Client) DeleteFile(name string) error {
+	resp, err := c.do("DELETE", "/files/"+name, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return readError(resp)
+	}
+	return nil
 }
 
 func (c *Client) do(method, path string, body io.Reader) (*http.Response, error) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -235,4 +236,191 @@ func TestProxyStripsCallerAuth(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, _ = http.DefaultClient.Do(req)
 	resp.Body.Close()
+}
+
+func TestFilesCRUD(t *testing.T) {
+	_, url := setupTestServer(t)
+	token := unlock(t, url, "master")
+
+	// Upload a file via multipart POST /files
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	w.WriteField("name", "test-file")
+	part, err := w.CreateFormFile("file", "test.json")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	part.Write([]byte(`{"key":"value"}`))
+	w.Close()
+
+	req, _ := http.NewRequest("POST", url+"/files", &buf)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("upload request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("upload file: expected 201, got %d %s", resp.StatusCode, data)
+	}
+
+	var fileInfo struct {
+		Name     string `json:"name"`
+		MimeType string `json:"mime_type"`
+		Size     int    `json:"size"`
+	}
+	json.NewDecoder(resp.Body).Decode(&fileInfo)
+	if fileInfo.Name != "test-file" {
+		t.Fatalf("expected file name 'test-file', got %q", fileInfo.Name)
+	}
+	if fileInfo.Size != len(`{"key":"value"}`) {
+		t.Fatalf("expected size %d, got %d", len(`{"key":"value"}`), fileInfo.Size)
+	}
+
+	// List files via GET /files
+	req, _ = http.NewRequest("GET", url+"/files", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("list request: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("list files: expected 200, got %d", resp2.StatusCode)
+	}
+
+	var files []struct {
+		Name string `json:"name"`
+	}
+	json.NewDecoder(resp2.Body).Decode(&files)
+	if len(files) != 1 || files[0].Name != "test-file" {
+		t.Fatalf("expected 1 file named 'test-file', got %+v", files)
+	}
+
+	// Download file via GET /files/{name}
+	req, _ = http.NewRequest("GET", url+"/files/test-file", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp3, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("download request: %v", err)
+	}
+	defer resp3.Body.Close()
+	if resp3.StatusCode != http.StatusOK {
+		t.Fatalf("download file: expected 200, got %d", resp3.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp3.Body)
+	if string(body) != `{"key":"value"}` {
+		t.Fatalf("download content mismatch: got %q", body)
+	}
+	if ct := resp3.Header.Get("Content-Disposition"); ct == "" {
+		t.Fatal("expected Content-Disposition header on download")
+	}
+
+	// Delete file via DELETE /files/{name}
+	req, _ = http.NewRequest("DELETE", url+"/files/test-file", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp4, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("delete request: %v", err)
+	}
+	defer resp4.Body.Close()
+	if resp4.StatusCode != http.StatusOK {
+		t.Fatalf("delete file: expected 200, got %d", resp4.StatusCode)
+	}
+
+	// Verify file is gone - list should be empty
+	req, _ = http.NewRequest("GET", url+"/files", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp5, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("list after delete request: %v", err)
+	}
+	defer resp5.Body.Close()
+
+	var filesAfter []struct {
+		Name string `json:"name"`
+	}
+	json.NewDecoder(resp5.Body).Decode(&filesAfter)
+	if len(filesAfter) != 0 {
+		t.Fatalf("expected 0 files after delete, got %+v", filesAfter)
+	}
+
+	// Download deleted file should 404
+	req, _ = http.NewRequest("GET", url+"/files/test-file", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp6, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("download deleted request: %v", err)
+	}
+	defer resp6.Body.Close()
+	if resp6.StatusCode != http.StatusNotFound {
+		t.Fatalf("download deleted file: expected 404, got %d", resp6.StatusCode)
+	}
+}
+
+func TestFilesProxyScopeBlocked(t *testing.T) {
+	_, url := setupTestServer(t)
+	adminToken := unlock(t, url, "master")
+
+	// Create proxy-scoped token
+	body, _ := json.Marshal(map[string]string{"scope": "proxy"})
+	req, _ := http.NewRequest("POST", url+"/tokens", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ := http.DefaultClient.Do(req)
+
+	var proxyToken struct{ ID string }
+	json.NewDecoder(resp.Body).Decode(&proxyToken)
+	resp.Body.Close()
+
+	if proxyToken.ID == "" {
+		t.Fatal("expected non-empty proxy token")
+	}
+
+	// POST /files - upload should be blocked
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	w.WriteField("name", "blocked-file")
+	part, _ := w.CreateFormFile("file", "test.txt")
+	part.Write([]byte("data"))
+	w.Close()
+
+	req, _ = http.NewRequest("POST", url+"/files", &buf)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+proxyToken.ID)
+	resp, _ = http.DefaultClient.Do(req)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("proxy token POST /files: expected 403, got %d", resp.StatusCode)
+	}
+
+	// GET /files - list should be blocked
+	req, _ = http.NewRequest("GET", url+"/files", nil)
+	req.Header.Set("Authorization", "Bearer "+proxyToken.ID)
+	resp, _ = http.DefaultClient.Do(req)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("proxy token GET /files: expected 403, got %d", resp.StatusCode)
+	}
+
+	// GET /files/{name} - download should be blocked
+	req, _ = http.NewRequest("GET", url+"/files/any-file", nil)
+	req.Header.Set("Authorization", "Bearer "+proxyToken.ID)
+	resp, _ = http.DefaultClient.Do(req)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("proxy token GET /files/{name}: expected 403, got %d", resp.StatusCode)
+	}
+
+	// DELETE /files/{name} - delete should be blocked
+	req, _ = http.NewRequest("DELETE", url+"/files/any-file", nil)
+	req.Header.Set("Authorization", "Bearer "+proxyToken.ID)
+	resp, _ = http.DefaultClient.Do(req)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("proxy token DELETE /files/{name}: expected 403, got %d", resp.StatusCode)
+	}
 }

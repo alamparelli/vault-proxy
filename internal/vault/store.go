@@ -152,6 +152,80 @@ func (s *Store) RemoveService(name string) error {
 	return s.saveLocked()
 }
 
+// ListFiles returns info for all stored files.
+func (s *Store) ListFiles() ([]FileInfo, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.locked {
+		return nil, fmt.Errorf("vault is locked")
+	}
+
+	out := make([]FileInfo, 0, len(s.vault.Files))
+	for _, f := range s.vault.Files {
+		out = append(out, f.Info())
+	}
+	return out, nil
+}
+
+// GetFile returns a file by name (with data).
+func (s *Store) GetFile(name string) (*File, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.locked {
+		return nil, fmt.Errorf("vault is locked")
+	}
+
+	f, ok := s.vault.Files[name]
+	if !ok {
+		return nil, fmt.Errorf("file %q not found", name)
+	}
+	return f, nil
+}
+
+// AddFile adds or updates a file and persists (upsert).
+func (s *Store) AddFile(f *File) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.locked {
+		return fmt.Errorf("vault is locked")
+	}
+
+	s.vault.Files[f.Name] = f
+	return s.saveLocked()
+}
+
+// RemoveFile deletes a file and persists.
+func (s *Store) RemoveFile(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.locked {
+		return fmt.Errorf("vault is locked")
+	}
+
+	if _, ok := s.vault.Files[name]; !ok {
+		return fmt.Errorf("file %q not found", name)
+	}
+	delete(s.vault.Files, name)
+	return s.saveLocked()
+}
+
+// UpdateServiceAuth updates only the auth field of a service and persists.
+// Used to persist refreshed OAuth2 tokens without replacing the full service.
+func (s *Store) UpdateServiceAuth(name string, auth Auth) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.locked {
+		return fmt.Errorf("vault is locked")
+	}
+
+	svc, ok := s.vault.Services[name]
+	if !ok {
+		return fmt.Errorf("service %q not found", name)
+	}
+	svc.Auth = auth
+	return s.saveLocked()
+}
+
 // saveLocked encrypts and writes the vault to disk. Must hold mu.
 func (s *Store) saveLocked() error {
 	plaintext, err := json.Marshal(s.vault)

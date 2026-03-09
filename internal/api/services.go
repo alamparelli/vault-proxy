@@ -55,6 +55,11 @@ func (s *Server) addServiceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := s.validateAuthType(&svc); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+
 	if err := s.store.AddService(&svc); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
 		return
@@ -75,6 +80,39 @@ func (s *Server) deleteServiceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// validateAuthType checks that auth-type-specific required fields are present.
+func (s *Server) validateAuthType(svc *vault.Service) error {
+	switch svc.Auth.Type {
+	case "bearer":
+		if svc.Auth.Token == "" {
+			return fmt.Errorf("bearer auth requires token")
+		}
+	case "header":
+		if svc.Auth.HeaderName == "" || svc.Auth.HeaderValue == "" {
+			return fmt.Errorf("header auth requires header_name and header_value")
+		}
+	case "basic":
+		if svc.Auth.Username == "" || svc.Auth.Password == "" {
+			return fmt.Errorf("basic auth requires username and password")
+		}
+	case "oauth2_client":
+		if svc.Auth.ClientID == "" || svc.Auth.ClientSecret == "" || svc.Auth.TokenURL == "" || svc.Auth.RefreshToken == "" {
+			return fmt.Errorf("oauth2_client requires client_id, client_secret, token_url, and refresh_token")
+		}
+	case "service_account":
+		if svc.Auth.FileRef == "" {
+			return fmt.Errorf("service_account requires file_ref")
+		}
+		// Validate file exists in store
+		if _, err := s.store.GetFile(svc.Auth.FileRef); err != nil {
+			return fmt.Errorf("file_ref %q: %w", svc.Auth.FileRef, err)
+		}
+	default:
+		return fmt.Errorf("unsupported auth type: %s", svc.Auth.Type)
+	}
+	return nil
 }
 
 // validateBaseURL ensures the URL is HTTPS and does not resolve to private/internal IPs.

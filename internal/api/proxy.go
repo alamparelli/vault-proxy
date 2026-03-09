@@ -1,20 +1,24 @@
 package api
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/alessandrolamparelli/vault-proxy/internal/oauth2"
 	"github.com/alessandrolamparelli/vault-proxy/internal/vault"
 )
 
 const (
 	defaultTimeout     = 30 * time.Second
 	maxRequestBodySize = 10 << 20 // 10 MB
+	tokenExpiryBuffer  = 30       // seconds before expiry to trigger refresh
 )
 
 // Dangerous headers that custom auth should never set.
@@ -87,8 +91,8 @@ func (s *Server) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Inject auth
-	if err := injectAuth(outReq, &svc.Auth); err != nil {
+	// Inject auth (may trigger OAuth2 refresh)
+	if err := s.injectAuth(r.Context(), outReq, svc); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
@@ -128,12 +132,13 @@ func (s *Server) proxyHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // injectAuth adds authentication to the outbound request.
-func injectAuth(req *http.Request, auth *vault.Auth) error {
+// For oauth2_client and service_account types, this handles lazy token refresh.
+func (s *Server) injectAuth(ctx context.Context, req *http.Request, svc *vault.Service) error {
+	auth := &svc.Auth
 	switch auth.Type {
 	case "bearer":
 		req.Header.Set("Authorization", "Bearer "+auth.Token)
 	case "header":
-		// Validate header name against denylist
 		if deniedHeaders[strings.ToLower(auth.HeaderName)] {
 			return fmt.Errorf("header %q is not allowed for auth injection", auth.HeaderName)
 		}
@@ -143,8 +148,126 @@ func injectAuth(req *http.Request, auth *vault.Auth) error {
 			[]byte(auth.Username + ":" + auth.Password),
 		)
 		req.Header.Set("Authorization", "Basic "+encoded)
+	case "oauth2_client":
+		token, err := s.ensureOAuth2Token(ctx, svc)
+		if err != nil {
+			return fmt.Errorf("oauth2 refresh: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+	case "service_account":
+		token, err := s.ensureServiceAccountToken(ctx, svc)
+		if err != nil {
+			return fmt.Errorf("service account exchange: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
 	default:
 		return fmt.Errorf("unsupported auth type: %s", auth.Type)
 	}
 	return nil
+}
+
+// getRefreshLock returns the per-service mutex for token refresh.
+func (s *Server) getRefreshLock(serviceName string) *sync.Mutex {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+
+	mu, ok := s.refreshLocks[serviceName]
+	if !ok {
+		mu = &sync.Mutex{}
+		s.refreshLocks[serviceName] = mu
+	}
+	return mu
+}
+
+// ensureOAuth2Token returns a valid access token, refreshing if needed.
+func (s *Server) ensureOAuth2Token(ctx context.Context, svc *vault.Service) (string, error) {
+	// Fast path: token still valid
+	if svc.Auth.AccessToken != "" && svc.Auth.ExpiresAt > time.Now().Unix()+tokenExpiryBuffer {
+		return svc.Auth.AccessToken, nil
+	}
+
+	// Acquire per-service lock
+	mu := s.getRefreshLock(svc.Name)
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Double-check after lock — another goroutine may have refreshed
+	fresh, err := s.store.GetService(svc.Name)
+	if err != nil {
+		return "", err
+	}
+	if fresh.Auth.AccessToken != "" && fresh.Auth.ExpiresAt > time.Now().Unix()+tokenExpiryBuffer {
+		return fresh.Auth.AccessToken, nil
+	}
+
+	// Refresh
+	client := s.proxyClient
+	if svc.TLSSkipVerify {
+		client = s.proxyClientInsecure
+	}
+	result, err := oauth2.RefreshAccessToken(ctx, client, fresh.Auth.TokenURL, fresh.Auth.ClientID, fresh.Auth.ClientSecret, fresh.Auth.RefreshToken, fresh.Auth.Scopes)
+	if err != nil {
+		return "", err
+	}
+
+	// Update auth and persist
+	updatedAuth := fresh.Auth
+	updatedAuth.AccessToken = result.AccessToken
+	updatedAuth.ExpiresAt = result.ExpiresAt
+	if result.RefreshToken != "" {
+		updatedAuth.RefreshToken = result.RefreshToken
+	}
+
+	if err := s.store.UpdateServiceAuth(svc.Name, updatedAuth); err != nil {
+		log.Printf("warning: failed to persist refreshed token for %s: %v", svc.Name, err)
+	}
+
+	return result.AccessToken, nil
+}
+
+// ensureServiceAccountToken returns a valid SA access token, exchanging JWT if needed.
+func (s *Server) ensureServiceAccountToken(ctx context.Context, svc *vault.Service) (string, error) {
+	// Fast path: token still valid
+	if svc.Auth.SAToken != "" && svc.Auth.SAExpiresAt > time.Now().Unix()+tokenExpiryBuffer {
+		return svc.Auth.SAToken, nil
+	}
+
+	mu := s.getRefreshLock(svc.Name)
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Double-check after lock
+	fresh, err := s.store.GetService(svc.Name)
+	if err != nil {
+		return "", err
+	}
+	if fresh.Auth.SAToken != "" && fresh.Auth.SAExpiresAt > time.Now().Unix()+tokenExpiryBuffer {
+		return fresh.Auth.SAToken, nil
+	}
+
+	// Load SA JSON file from vault
+	f, err := s.store.GetFile(fresh.Auth.FileRef)
+	if err != nil {
+		return "", fmt.Errorf("load service account file %q: %w", fresh.Auth.FileRef, err)
+	}
+
+	client := s.proxyClient
+	if svc.TLSSkipVerify {
+		client = s.proxyClientInsecure
+	}
+	result, err := oauth2.ExchangeServiceAccountJWT(ctx, client, f.Data, fresh.Auth.SAScopes, fresh.Auth.SATokenURL)
+	if err != nil {
+		return "", err
+	}
+
+	// Persist
+	updatedAuth := fresh.Auth
+	updatedAuth.SAToken = result.AccessToken
+	updatedAuth.SAExpiresAt = result.ExpiresAt
+
+	if err := s.store.UpdateServiceAuth(svc.Name, updatedAuth); err != nil {
+		log.Printf("warning: failed to persist SA token for %s: %v", svc.Name, err)
+	}
+
+	return result.AccessToken, nil
 }

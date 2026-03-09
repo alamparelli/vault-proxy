@@ -56,6 +56,24 @@ func main() {
 			fmt.Fprintf(os.Stderr, "unknown service command: %s\n", args[0])
 			os.Exit(1)
 		}
+	case "file":
+		if len(args) == 0 {
+			fmt.Fprintln(os.Stderr, "usage: vault-cli file <upload|list|download|delete>")
+			os.Exit(1)
+		}
+		switch args[0] {
+		case "upload":
+			cmdFileUpload(args[1:])
+		case "list":
+			cmdFileList()
+		case "download":
+			cmdFileDownload(args[1:])
+		case "delete":
+			cmdFileDelete(args[1:])
+		default:
+			fmt.Fprintf(os.Stderr, "unknown file command: %s\n", args[0])
+			os.Exit(1)
+		}
 	case "http":
 		cmdHTTP(args)
 	case "proxy":
@@ -95,6 +113,10 @@ Commands:
   service list            List configured services
   service add <json>      Add/update a service (JSON on stdin or arg)
   service remove <name>   Remove a service
+  file upload <name> <path>  Upload a file to the vault
+  file list                  List stored files
+  file download <name> [out] Download a file from the vault
+  file delete <name>         Delete a file from the vault
   http                    Proxy an HTTP request (--service, --method, --path, --body)
   proxy <svc> <M> <path> [body]  Shorthand proxy (for AI agents)
   token create [scope]    Create a session token (admin|proxy, default: proxy)
@@ -372,6 +394,84 @@ func cmdTokenRevoke(args []string) {
 		os.Exit(1)
 	}
 	fmt.Println("Token revoked.")
+}
+
+// --- File commands ---
+
+func cmdFileUpload(args []string) {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: vault-cli file upload <name> <path>")
+		os.Exit(1)
+	}
+	name := args[0]
+	path := args[1]
+
+	c := newClient()
+	if err := c.UploadFile(name, path); err != nil {
+		fmt.Fprintf(os.Stderr, "upload failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("File %q uploaded.\n", name)
+}
+
+func cmdFileList() {
+	c := newClient()
+	files, err := c.ListFiles()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if len(files) == 0 {
+		fmt.Println("No files stored.")
+		return
+	}
+	for _, f := range files {
+		fmt.Printf("  %-30s %s (%d bytes)\n", f.Name, f.MimeType, f.Size)
+	}
+}
+
+func cmdFileDownload(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: vault-cli file download <name> [output]")
+		os.Exit(1)
+	}
+	name := args[0]
+	output := name
+	if len(args) > 1 {
+		output = args[1]
+	}
+
+	c := newClient()
+	data, err := c.GetFile(name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "download failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	if output == "-" {
+		os.Stdout.Write(data)
+		return
+	}
+
+	if err := os.WriteFile(output, data, 0600); err != nil {
+		fmt.Fprintf(os.Stderr, "write file: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("File %q saved to %s (%d bytes)\n", name, output, len(data))
+}
+
+func cmdFileDelete(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: vault-cli file delete <name>")
+		os.Exit(1)
+	}
+
+	c := newClient()
+	if err := c.DeleteFile(args[0]); err != nil {
+		fmt.Fprintf(os.Stderr, "delete failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("File deleted.")
 }
 
 func doRaw(c *client.Client, method, path string, body io.Reader) (*http.Response, error) {

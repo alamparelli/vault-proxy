@@ -17,3 +17,10 @@ type TokenInfo struct {
 	CreatedAt string `json:"created_at,omitempty"`
 	ExpiresAt string `json:"expires_at,omitempty"`
 }
+
+// FileInfo is a safe view of a stored file (no data).
+type FileInfo struct {
+	Name     string `json:"name"`
+	MimeType string `json:"mime_type"`
+	Size     int    `json:"size"`
+}

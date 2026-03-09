@@ -32,6 +32,10 @@ type Server struct {
 	proxyClient         *http.Client
 	proxyClientInsecure *http.Client
 
+	// Per-service token refresh locks (prevents thundering herd)
+	refreshLocks map[string]*sync.Mutex
+	refreshMu    sync.Mutex
+
 	// Brute-force protection
 	unlockMu       sync.Mutex
 	unlockFailures int
@@ -48,9 +52,10 @@ func NewServer(store *vault.Store, tokenTTL time.Duration) *Server {
 	insecureTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 
 	s := &Server{
-		store:  store,
-		tokens: NewTokenStore(tokenTTL),
-		mux:    http.NewServeMux(),
+		store:        store,
+		tokens:       NewTokenStore(tokenTTL),
+		mux:          http.NewServeMux(),
+		refreshLocks: make(map[string]*sync.Mutex),
 		proxyClient: &http.Client{
 			Timeout:       30 * time.Second,
 			CheckRedirect: noRedirect,
@@ -77,6 +82,10 @@ func (s *Server) routes() {
 	// Services (GET = proxy scope, mutations = admin scope)
 	s.mux.HandleFunc("/services", s.servicesRouter)
 	s.mux.HandleFunc("/services/", s.requireAuth(ScopeProxy, s.servicesDetailRouter))
+
+	// Files (admin scope)
+	s.mux.HandleFunc("/files", s.requireAuth(ScopeAdmin, s.filesRouter))
+	s.mux.HandleFunc("/files/", s.requireAuth(ScopeAdmin, s.filesDetailRouter))
 
 	// Proxy (proxy scope)
 	s.mux.HandleFunc("/proxy/", s.requireAuth(ScopeProxy, s.proxyHandler))
