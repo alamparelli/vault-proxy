@@ -9,7 +9,10 @@ type ServiceInfo struct {
 }
 
 // TokenInfo describes an active token (no secret material).
+// The server returns id_prefix (first 8 chars) — full IDs are never listed.
 type TokenInfo struct {
-	ID    string `json:"id"`
-	Scope string `json:"scope"`
+	IDPrefix  string `json:"id_prefix"`
+	Scope     string `json:"scope"`
+	CreatedAt string `json:"created_at,omitempty"`
+	ExpiresAt string `json:"expires_at,omitempty"`
 }

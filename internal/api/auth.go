@@ -102,6 +102,20 @@ func (ts *TokenStore) List() []*Token {
 	return out
 }
 
+// RevokeByPrefix revokes the first token matching the given prefix.
+// Returns true if a token was found and revoked.
+func (ts *TokenStore) RevokeByPrefix(prefix string) bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	for id := range ts.tokens {
+		if len(id) >= len(prefix) && id[:len(prefix)] == prefix {
+			delete(ts.tokens, id)
+			return true
+		}
+	}
+	return false
+}
+
 // RevokeAll clears all tokens (used on lock).
 func (ts *TokenStore) RevokeAll() {
 	ts.mu.Lock()

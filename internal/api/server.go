@@ -204,7 +204,13 @@ func (s *Server) revokeTokenHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"missing token id"}`, http.StatusBadRequest)
 		return
 	}
-	s.tokens.Revoke(id)
+	// Try exact match first, then prefix match (for UI which only has id_prefix).
+	if _, err := s.tokens.Validate(id); err == nil {
+		s.tokens.Revoke(id)
+	} else if !s.tokens.RevokeByPrefix(id) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "token not found"})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
 }
 
