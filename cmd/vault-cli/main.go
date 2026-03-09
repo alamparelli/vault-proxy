@@ -7,10 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/alessandrolamparelli/vault-proxy/pkg/client"
 	"golang.org/x/term"
 )
+
+var cliHTTPClient = &http.Client{Timeout: 60 * time.Second}
 
 const sessionFile = ".vault-proxy/session"
 
@@ -382,5 +385,5 @@ func doRaw(c *client.Client, method, path string, body io.Reader) (*http.Respons
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	return http.DefaultClient.Do(req)
+	return cliHTTPClient.Do(req)
 }

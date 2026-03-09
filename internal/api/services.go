@@ -3,7 +3,9 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/alessandrolamparelli/vault-proxy/internal/vault"
@@ -48,6 +50,11 @@ func (s *Server) addServiceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := validateBaseURL(svc.BaseURL, svc.TLSSkipVerify); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+
 	if err := s.store.AddService(&svc); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
 		return
@@ -68,4 +75,40 @@ func (s *Server) deleteServiceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// validateBaseURL ensures the URL is HTTPS and does not resolve to private/internal IPs.
+// When allowPrivate is true (tls_skip_verify services), HTTP and private IPs are permitted
+// (intended for internal/self-signed services).
+func validateBaseURL(rawURL string, allowPrivate bool) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("base_url must have a host")
+	}
+
+	if allowPrivate {
+		if u.Scheme != "https" && u.Scheme != "http" {
+			return fmt.Errorf("base_url must use HTTP or HTTPS")
+		}
+		return nil
+	}
+
+	if u.Scheme != "https" {
+		return fmt.Errorf("base_url must use HTTPS")
+	}
+
+	host := u.Hostname()
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return nil // DNS may not resolve at config time; proxy-time check is defense-in-depth
+	}
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return fmt.Errorf("base_url must not resolve to a private or internal IP")
+		}
+	}
+	return nil
 }

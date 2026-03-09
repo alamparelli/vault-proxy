@@ -2,11 +2,20 @@ package api
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
 )
+
+// tokenHash returns a SHA-256 hash of the token ID for use as a map key.
+// This prevents timing side-channels in map lookups.
+func tokenHash(id string) string {
+	h := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(h[:])
+}
 
 // TokenScope defines what a token can do.
 type TokenScope string
@@ -56,7 +65,7 @@ func (ts *TokenStore) Create(scope TokenScope) (*Token, error) {
 	}
 
 	ts.mu.Lock()
-	ts.tokens[id] = t
+	ts.tokens[tokenHash(id)] = t
 	ts.mu.Unlock()
 
 	return t, nil
@@ -65,7 +74,7 @@ func (ts *TokenStore) Create(scope TokenScope) (*Token, error) {
 // Validate checks a token and returns it if valid.
 func (ts *TokenStore) Validate(id string) (*Token, error) {
 	ts.mu.RLock()
-	t, ok := ts.tokens[id]
+	t, ok := ts.tokens[tokenHash(id)]
 	ts.mu.RUnlock()
 
 	if !ok {
@@ -81,7 +90,7 @@ func (ts *TokenStore) Validate(id string) (*Token, error) {
 // Revoke removes a token.
 func (ts *TokenStore) Revoke(id string) {
 	ts.mu.Lock()
-	delete(ts.tokens, id)
+	delete(ts.tokens, tokenHash(id))
 	ts.mu.Unlock()
 }
 
@@ -92,9 +101,9 @@ func (ts *TokenStore) List() []*Token {
 
 	now := time.Now()
 	out := make([]*Token, 0, len(ts.tokens))
-	for id, t := range ts.tokens {
+	for key, t := range ts.tokens {
 		if now.After(t.ExpiresAt) {
-			delete(ts.tokens, id)
+			delete(ts.tokens, key)
 			continue
 		}
 		out = append(out, t)
@@ -107,19 +116,20 @@ func (ts *TokenStore) List() []*Token {
 func (ts *TokenStore) RevokeByPrefix(prefix string) error {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
-	var match string
-	for id := range ts.tokens {
-		if len(id) >= len(prefix) && id[:len(prefix)] == prefix {
-			if match != "" {
+	var matchKey string
+	for key, t := range ts.tokens {
+		if len(t.ID) >= len(prefix) &&
+			subtle.ConstantTimeCompare([]byte(t.ID[:len(prefix)]), []byte(prefix)) == 1 {
+			if matchKey != "" {
 				return fmt.Errorf("ambiguous prefix: matches multiple tokens")
 			}
-			match = id
+			matchKey = key
 		}
 	}
-	if match == "" {
+	if matchKey == "" {
 		return fmt.Errorf("no token found")
 	}
-	delete(ts.tokens, match)
+	delete(ts.tokens, matchKey)
 	return nil
 }
 

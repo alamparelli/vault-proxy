@@ -173,12 +173,16 @@ func TestProxyHandler(t *testing.T) {
 
 	token := unlock(t, ts.URL, "master")
 
-	// Add service pointing to our fake upstream
-	svc := fmt.Sprintf(`{"name":"testapi","base_url":"%s","auth":{"type":"bearer","token":"sk-secret-key"}}`, upstream.URL)
+	// Add service pointing to our fake upstream (tls_skip_verify allows HTTP in tests)
+	svc := fmt.Sprintf(`{"name":"testapi","base_url":"%s","auth":{"type":"bearer","token":"sk-secret-key"},"tls_skip_verify":true}`, upstream.URL)
 	req, _ := http.NewRequest("POST", ts.URL+"/services", bytes.NewReader([]byte(svc)))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, _ := http.DefaultClient.Do(req)
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("add service failed: %d %s", resp.StatusCode, body)
+	}
 	resp.Body.Close()
 
 	// Proxy a request
@@ -220,7 +224,7 @@ func TestProxyStripsCallerAuth(t *testing.T) {
 
 	token := unlock(t, ts.URL, "master")
 
-	svc := fmt.Sprintf(`{"name":"svc","base_url":"%s","auth":{"type":"bearer","token":"injected-token"}}`, upstream.URL)
+	svc := fmt.Sprintf(`{"name":"svc","base_url":"%s","auth":{"type":"bearer","token":"injected-token"},"tls_skip_verify":true}`, upstream.URL)
 	req, _ := http.NewRequest("POST", ts.URL+"/services", bytes.NewReader([]byte(svc)))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")

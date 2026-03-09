@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -59,8 +60,8 @@ func (s *Server) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		targetURL += "?" + r.URL.RawQuery
 	}
 
-	// Validate target URL scheme
-	if !strings.HasPrefix(targetURL, "https://") && !strings.HasPrefix(targetURL, "http://127.0.0.1") && !strings.HasPrefix(targetURL, "http://localhost") {
+	// Validate target URL scheme (defense-in-depth, also validated at service creation)
+	if !strings.HasPrefix(targetURL, "https://") && !svc.TLSSkipVerify {
 		http.Error(w, `{"error":"service base_url must be HTTPS"}`, http.StatusBadRequest)
 		return
 	}
@@ -95,8 +96,13 @@ func (s *Server) proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send request — disable redirects to prevent SSRF via 302
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if svc.TLSSkipVerify {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
 	client := &http.Client{
-		Timeout: defaultTimeout,
+		Timeout:   defaultTimeout,
+		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return errors.New("redirects disabled for security")
 		},

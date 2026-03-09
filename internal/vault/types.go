@@ -8,9 +8,10 @@ type Vault struct {
 
 // Service represents a configured API service.
 type Service struct {
-	Name    string `json:"name"`
-	BaseURL string `json:"base_url"`
-	Auth    Auth   `json:"auth"`
+	Name          string `json:"name"`
+	BaseURL       string `json:"base_url"`
+	Auth          Auth   `json:"auth"`
+	TLSSkipVerify bool   `json:"tls_skip_verify,omitempty"`
 }
 
 // Auth holds credentials for a service.
@@ -38,16 +39,18 @@ type File struct {
 
 // ServiceInfo is a safe view of a service (no secrets).
 type ServiceInfo struct {
-	Name     string `json:"name"`
-	BaseURL  string `json:"base_url"`
-	AuthType string `json:"auth_type"`
+	Name          string `json:"name"`
+	BaseURL       string `json:"base_url"`
+	AuthType      string `json:"auth_type"`
+	TLSSkipVerify bool   `json:"tls_skip_verify,omitempty"`
 }
 
 // SafeInfo returns a secret-free view of the service.
 func (s *Service) SafeInfo() ServiceInfo {
 	return ServiceInfo{
-		Name:     s.Name,
-		BaseURL:  s.BaseURL,
-		AuthType: s.Auth.Type,
+		Name:          s.Name,
+		BaseURL:       s.BaseURL,
+		AuthType:      s.Auth.Type,
+		TLSSkipVerify: s.TLSSkipVerify,
 	}
 }
