@@ -102,18 +102,25 @@ func (ts *TokenStore) List() []*Token {
 	return out
 }
 
-// RevokeByPrefix revokes the first token matching the given prefix.
-// Returns true if a token was found and revoked.
-func (ts *TokenStore) RevokeByPrefix(prefix string) bool {
+// RevokeByPrefix revokes a token matching the given prefix.
+// Returns an error if no match or ambiguous (multiple matches).
+func (ts *TokenStore) RevokeByPrefix(prefix string) error {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
+	var match string
 	for id := range ts.tokens {
 		if len(id) >= len(prefix) && id[:len(prefix)] == prefix {
-			delete(ts.tokens, id)
-			return true
+			if match != "" {
+				return fmt.Errorf("ambiguous prefix: matches multiple tokens")
+			}
+			match = id
 		}
 	}
-	return false
+	if match == "" {
+		return fmt.Errorf("no token found")
+	}
+	delete(ts.tokens, match)
+	return nil
 }
 
 // RevokeAll clears all tokens (used on lock).
