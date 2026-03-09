@@ -221,6 +221,79 @@ vault-cli http --service openrouter --method POST \
 - Claude uses `vault-cli http` (in tools.d/) — can proxy requests but never see secrets
 - Admin operations (add/remove services) require `admin` token (CC UI or host CLI only)
 
+## Security Hardening
+
+Findings from ALF's automated security audit (2026-03-05) that Vault-Proxy resolves or mitigates.
+
+### Solved by design
+
+| Risk | Before (tools manage their own secrets) | With Vault-Proxy |
+|------|----------------------------------------|------------------|
+| **Plaintext token files** (OAuth tokens as 0644 JSON) | Tools write `token.json` to disk, readable by any process | All credentials in `vault.enc` (AES-256-GCM). No plaintext on disk. |
+| **Hardcoded client IDs** (GCP project IDs in source code) | `client_secret_1009...apps.googleusercontent.com.json` in tool source | Client secret files stored in vault's encrypted `Files` store. Source code references service names, never credentials. |
+| **Tokens in process memory** (`SECRET = open(file).read()`) | Each tool loads and holds credentials for its entire lifetime | Tools never see credentials. Vault server holds them in one isolated process with a controlled lifecycle (`lock` clears memory). |
+| **No file permission validation** (tokens at 0644) | Tools don't check permissions; any container process can read tokens | No token files to protect. Vault session file enforced at 0600. |
+
+### Proxy-level protections
+
+These protections apply to all proxied requests regardless of how the calling tool is written.
+
+**Request validation:**
+- Outbound URLs restricted to the service's configured `base_url` — prevents SSRF via path manipulation
+- Request body size limit per service (configurable, default 10MB) — prevents OOM from unbounded payloads
+- Response body size limit per service (configurable, default 50MB) — prevents OOM from malicious API responses
+- Timeout per service (configurable, default 30s) — prevents hung connections
+
+**URL and host validation:**
+- `base_url` must be HTTPS (reject HTTP unless explicitly allowed for localhost)
+- Path traversal in proxy path (`/proxy/svc/../../../etc/passwd`) rejected by URL normalization
+- No support for `javascript:`, `data:`, or other non-HTTP schemes
+
+**Auth injection safety:**
+- Auth headers are injected server-side, never exposed in proxy response headers
+- Caller-provided `Authorization` headers are stripped before forwarding (prevents override)
+- OAuth2 token refresh happens server-side; refresh tokens never leave the vault
+
+**Audit logging:**
+- Every proxy call logged: `timestamp, service, method, path, status, duration, caller_token_id`
+- Credentials never logged — not in request, not in response, not in errors
+- Token creation/revocation logged with admin context
+- Log rotation configurable (default: daily, 30 days retention)
+
+### Network isolation
+
+```
+┌─────────────────────────────────┐
+│ Host / Sidecar                  │
+│                                 │
+│   vault-server                  │
+│   127.0.0.1:8390  ◄─────────── │ ──── Never exposed externally
+│                                 │
+└───────────┬─────────────────────┘
+            │ Docker network or localhost
+┌───────────▼─────────────────────┐
+│ ALF Container                   │
+│                                 │
+│   Claude / tools                │
+│   → vault-cli http (proxy-only) │
+│   → VAULT_TOKEN env var         │
+│   → Cannot reach vault admin API│
+└─────────────────────────────────┘
+```
+
+- Server binds to `127.0.0.1` only (or Docker internal network)
+- No external port exposure — tools inside the container reach vault via internal network
+- `proxy` tokens cannot access `/services` CRUD or `/files` — only `/proxy/*` and `/health`
+- Even if a `proxy` token leaks, attacker can only call pre-configured services, not read credentials
+
+### Edge cases to handle
+
+- **Vault locked while tools are running**: proxy returns 503 with `Retry-After` header. Tools should handle gracefully.
+- **Token expiry mid-request**: if a proxy token expires during a long request, the request completes but subsequent requests fail with 401. Tools retry with a fresh token from `VAULT_TOKEN`.
+- **Concurrent OAuth2 refresh**: mutex on per-service token refresh to prevent thundering herd against the OAuth2 provider.
+- **Vault file corruption**: keep one backup (`vault.enc.bak`) on each successful save. CLI `vault-cli backup` exports encrypted copy.
+- **Master password lost**: no recovery. Document this clearly. Encourage users to store master password in a password manager.
+
 ## Tech Stack
 
 - **Language**: Go (single static binary, matches ALF)
