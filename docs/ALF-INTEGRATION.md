@@ -5,32 +5,35 @@ How to integrate vault-proxy with [ALF](https://github.com/alessandrolamparelli/
 ## Architecture
 
 ```
-┌─────────────────────────────────────┐
-│ Host                                │
-│                                     │
-│  vault-server (127.0.0.1:8390)      │
-│  ├── vault.enc (encrypted secrets)  │
-│  └── admin access (vault-cli)       │
-│                                     │
-└───────────┬─────────────────────────┘
+apt┌─────────────────────────────────────────────────┐
+│ Host                                            │
+│                                                 │
+│  vault-server (127.0.0.1:8390)                  │
+│  ├── vault.enc (encrypted secrets)              │
+│  └── admin token → passed to ALF daemon         │
+│                                                 │
+└───────────┬─────────────────────────────────────┘
             │ Docker network / localhost
-┌───────────▼─────────────────────────┐
-│ ALF Container                       │
-│                                     │
-│  Claude subprocess (uid=1001)       │
-│  ├── VAULT_TOKEN=<proxy-scope>      │
-│  ├── VAULT_ADDR=http://host:8390    │
-│  └── vault (in tools.d/, on PATH)   │
-│                                     │
-│  Claude runs:                       │
-│    vault proxy openrouter POST \    │
-│      /v1/chat/completions '...'     │
-│                                     │
-│  → Never sees API keys              │
-│  → Can only call pre-configured     │
-│    services                         │
-│  → All calls logged                 │
-└─────────────────────────────────────┘
+┌───────────▼─────────────────────────────────────┐
+│ ALF Container                                   │
+│                                                 │
+│  alf-daemon (uid=1000)                          │
+│  ├── VAULT_ADMIN_TOKEN (from secret)            │
+│  ├── Creates proxy token for Claude at startup  │
+│  └── Control Center :8080                       │
+│       └── /vault page (admin UI for secrets)    │
+│           ├── List / add / remove services      │
+│           ├── Test service connectivity          │
+│           └── Manage tokens                     │
+│                                                 │
+│  Claude subprocess (uid=1001)                   │
+│  ├── VAULT_TOKEN=<proxy-scope>                  │
+│  ├── VAULT_ADDR=http://host:8390                │
+│  └── vault (in tools.d/, on PATH)               │
+│       → vault proxy <svc> <method> <path> [body]│
+│       → Never sees API keys                     │
+│       → All calls logged                        │
+└─────────────────────────────────────────────────┘
 ```
 
 ## Setup
@@ -62,15 +65,15 @@ services:
     # ...existing config...
     environment:
       - VAULT_ADDR=http://host.docker.internal:8390
-      - VAULT_TOKEN_FILE=/run/secrets/vault_token
+      - VAULT_ADMIN_TOKEN_FILE=/run/secrets/vault_admin_token
     extra_hosts:
       - "host.docker.internal:host-gateway"  # Linux only
     secrets:
-      - vault_token
+      - vault_admin_token
 
 secrets:
-  vault_token:
-    file: ./secrets/vault_token
+  vault_admin_token:
+    file: ./secrets/vault_admin_token
 ```
 
 ### 4. Pass VAULT_TOKEN to Claude subprocess
@@ -111,6 +114,126 @@ if err != nil {
     os.Setenv("VAULT_TOKEN", proxyToken)
 }
 ```
+
+## Control Center — Vault Page
+
+The CC acts as the admin UI for vault-proxy. The daemon holds an `admin` token, so the CC can do full CRUD without exposing vault-cli to the user.
+
+### CC Backend: vault handlers
+
+Add to `internal/controlcenter/handler_vault.go`:
+
+```go
+// All handlers proxy to vault-server using the daemon's admin token.
+// The CC auth (magic link) protects access — only the authorized user
+// can manage secrets.
+
+// GET  /api/vault/status     → vault health + unlock state
+// POST /api/vault/unlock     → unlock vault (CC prompts for master password)
+// POST /api/vault/lock       → lock vault
+
+// GET  /api/vault/services   → list services (safe info only)
+// POST /api/vault/services   → add/update service
+// DELETE /api/vault/services/{name} → remove service
+// POST /api/vault/services/{name}/test → test connectivity
+
+// GET  /api/vault/tokens     → list active tokens (masked IDs)
+// POST /api/vault/tokens     → create token
+// DELETE /api/vault/tokens/{id} → revoke token
+```
+
+Implementation pattern — thin proxy to vault-server:
+
+```go
+type VaultHandler struct {
+    vaultClient *client.Client // admin-scoped
+}
+
+func (h *VaultHandler) ListServices(w http.ResponseWriter, r *http.Request) {
+    services, err := h.vaultClient.ListServices()
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusBadGateway)
+        return
+    }
+    json.NewEncoder(w).Encode(services)
+}
+
+func (h *VaultHandler) AddService(w http.ResponseWriter, r *http.Request) {
+    // Read JSON from CC frontend, forward to vault-server
+    resp, err := h.doRaw("POST", "/services", r.Body)
+    // ...forward response
+}
+
+func (h *VaultHandler) TestService(w http.ResponseWriter, r *http.Request) {
+    name := chi.URLParam(r, "name")
+    // Make a lightweight GET request through the proxy to verify credentials work
+    resp, err := h.vaultClient.Proxy(name, "GET", "/", nil)
+    // Return status code + latency to frontend
+}
+```
+
+### CC Frontend: vault page
+
+The page fits the existing CC UI pattern (like tools/skills pages):
+
+```
+┌─────────────────────────────────────────────┐
+│ Vault                              [Lock 🔒]│
+├─────────────────────────────────────────────┤
+│                                             │
+│ Services                          [+ Add]   │
+│ ┌─────────────────────────────────────────┐ │
+│ │ openrouter    https://openrouter.ai/api │ │
+│ │ bearer        ✅ connected     [Delete] │ │
+│ ├─────────────────────────────────────────┤ │
+│ │ anthropic     https://api.anthropic.com │ │
+│ │ header        ✅ connected     [Delete] │ │
+│ ├─────────────────────────────────────────┤ │
+│ │ github        https://api.github.com    │ │
+│ │ bearer        ❌ 401           [Delete] │ │
+│ └─────────────────────────────────────────┘ │
+│                                             │
+│ Active Tokens                               │
+│ ┌─────────────────────────────────────────┐ │
+│ │ a64f2e... proxy  expires in 23h [Revoke]│ │
+│ │ 938def... admin  expires in 22h [Revoke]│ │
+│ └─────────────────────────────────────────┘ │
+│                                             │
+│ [+ Create Token]                            │
+└─────────────────────────────────────────────┘
+```
+
+**Add Service modal:**
+```
+┌─────────────────────────────────────┐
+│ Add Service                         │
+│                                     │
+│ Name:     [openrouter            ]  │
+│ Base URL: [https://openrouter.ai/api]│
+│                                     │
+│ Auth Type: [bearer ▾]               │
+│ Token:    [sk-or-v1-xxxxx       ]   │
+│                                     │
+│           [Cancel]  [Add & Test]    │
+└─────────────────────────────────────┘
+```
+
+Auth type dropdown shows fields conditionally:
+- `bearer` → Token
+- `header` → Header Name + Header Value
+- `basic` → Username + Password
+
+### Unlock flow
+
+If the vault is locked when the CC page loads:
+
+1. CC shows "Vault is locked" with a password input
+2. User enters master password in the CC UI
+3. CC posts to `/api/vault/unlock` → daemon forwards to vault-server
+4. On success, CC gets admin token, stores it in daemon memory
+5. Page reloads with full service/token management
+
+This replaces the need to SSH into the host and run `vault-cli unlock`.
 
 ## How Claude Uses It
 
@@ -173,7 +296,7 @@ vault proxy openrouter POST /v1/chat/completions '{
 
 - Vault-server runs on the host machine
 - Container reaches it via `host.docker.internal`
-- Master password managed by the human operator
+- Master password managed via CC unlock page or host CLI
 - Simplest setup, survives container restarts
 
 ### Option B: Vault as sidecar container
@@ -199,24 +322,25 @@ networks:
     internal: true  # No external access
 ```
 
-With sidecar, you need to unlock the vault on container start. Options:
-- Unlock via Control Center UI on first boot
-- Auto-unlock with password from Docker secret (less secure but convenient)
+With sidecar, unlock the vault via the CC page on first boot.
 
 ## Security Considerations
 
+- CC auth (magic link) gates all vault admin operations — only the authorized user can manage secrets
 - `proxy` tokens **cannot** read or modify secrets — only proxy requests
 - Even if a proxy token leaks, the attacker can only call pre-configured services
 - Vault-server only binds to localhost (or Docker internal network)
 - All proxy calls logged with: service, method, path, status, duration, token_id
 - Credentials never logged, never in error messages, never in responses
 - Claude runs as `uid=1001` — minimal filesystem access
+- The CC never stores the master password — it only forwards it to vault-server for unlock
 
 ## Migrating existing tool credentials
 
 If tools currently manage their own API keys (e.g., `token.json` files):
 
-1. Add each service to vault: `vault-cli service add '{"name":"...","base_url":"...","auth":{...}}'`
-2. Update tools to use `vault proxy` instead of direct API calls
-3. Delete plaintext credential files from the container
-4. Rotate the API keys (old ones may have been exposed)
+1. Open CC → Vault page → Add Service for each API
+2. Test connectivity from the CC UI
+3. Update tools to use `vault proxy` instead of direct API calls
+4. Delete plaintext credential files from the container
+5. Rotate the API keys (old ones may have been exposed)
