@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -48,8 +49,33 @@ func NewServer(store *vault.Store, tokenTTL time.Duration) *Server {
 		return errors.New("redirects disabled for security")
 	}
 
+	// SEC-001: Custom dialer that validates resolved IPs at connect time
+	// to prevent DNS rebinding attacks (TOCTOU between service creation and proxy use).
+	ssrfSafeDialer := &net.Dialer{Timeout: 10 * time.Second}
+	ssrfSafeDialContext := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid address: %w", err)
+		}
+		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("DNS resolution failed: %w", err)
+		}
+		for _, ip := range ips {
+			if ip.IP.IsLoopback() || ip.IP.IsPrivate() || ip.IP.IsLinkLocalUnicast() || ip.IP.IsLinkLocalMulticast() {
+				return nil, fmt.Errorf("resolved IP %s is private/internal — blocked for SSRF protection", ip.IP)
+			}
+		}
+		// Connect to the first resolved IP directly (prevents re-resolution)
+		return ssrfSafeDialer.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+	}
+
+	safeTransport := http.DefaultTransport.(*http.Transport).Clone()
+	safeTransport.DialContext = ssrfSafeDialContext
+
 	insecureTransport := http.DefaultTransport.(*http.Transport).Clone()
 	insecureTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	// Insecure transport skips SSRF IP check (intended for internal/self-signed services)
 
 	s := &Server{
 		store:        store,
@@ -58,6 +84,7 @@ func NewServer(store *vault.Store, tokenTTL time.Duration) *Server {
 		refreshLocks: make(map[string]*sync.Mutex),
 		proxyClient: &http.Client{
 			Timeout:       30 * time.Second,
+			Transport:     safeTransport,
 			CheckRedirect: noRedirect,
 		},
 		proxyClientInsecure: &http.Client{

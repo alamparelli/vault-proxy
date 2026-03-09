@@ -58,7 +58,7 @@ func TestHealth(t *testing.T) {
 func TestUnlockAndLock(t *testing.T) {
 	_, url := setupTestServer(t)
 
-	token := unlock(t, url, "master")
+	token := unlock(t, url, "master-password-12")
 	if token == "" {
 		t.Fatal("expected non-empty token")
 	}
@@ -84,7 +84,7 @@ func TestUnlockAndLock(t *testing.T) {
 
 func TestServicesCRUD(t *testing.T) {
 	_, url := setupTestServer(t)
-	token := unlock(t, url, "master")
+	token := unlock(t, url, "master-password-12")
 
 	// Add service
 	svc := `{"name":"openrouter","base_url":"https://openrouter.ai/api","auth":{"type":"bearer","token":"sk-123"}}`
@@ -119,7 +119,7 @@ func TestServicesCRUD(t *testing.T) {
 
 func TestProxyScopeRestrictions(t *testing.T) {
 	_, url := setupTestServer(t)
-	adminToken := unlock(t, url, "master")
+	adminToken := unlock(t, url, "master-password-12")
 
 	// Create proxy-scoped token
 	body, _ := json.Marshal(map[string]string{"scope": "proxy"})
@@ -172,7 +172,7 @@ func TestProxyHandler(t *testing.T) {
 	ts := httptest.NewServer(server)
 	defer ts.Close()
 
-	token := unlock(t, ts.URL, "master")
+	token := unlock(t, ts.URL, "master-password-12")
 
 	// Add service pointing to our fake upstream (tls_skip_verify allows HTTP in tests)
 	svc := fmt.Sprintf(`{"name":"testapi","base_url":"%s","auth":{"type":"bearer","token":"sk-secret-key"},"tls_skip_verify":true}`, upstream.URL)
@@ -223,7 +223,7 @@ func TestProxyStripsCallerAuth(t *testing.T) {
 	ts := httptest.NewServer(server)
 	defer ts.Close()
 
-	token := unlock(t, ts.URL, "master")
+	token := unlock(t, ts.URL, "master-password-12")
 
 	svc := fmt.Sprintf(`{"name":"svc","base_url":"%s","auth":{"type":"bearer","token":"injected-token"},"tls_skip_verify":true}`, upstream.URL)
 	req, _ := http.NewRequest("POST", ts.URL+"/services", bytes.NewReader([]byte(svc)))
@@ -240,7 +240,7 @@ func TestProxyStripsCallerAuth(t *testing.T) {
 
 func TestFilesCRUD(t *testing.T) {
 	_, url := setupTestServer(t)
-	token := unlock(t, url, "master")
+	token := unlock(t, url, "master-password-12")
 
 	// Upload a file via multipart POST /files
 	var buf bytes.Buffer
@@ -363,7 +363,7 @@ func TestFilesCRUD(t *testing.T) {
 
 func TestFilesProxyScopeBlocked(t *testing.T) {
 	_, url := setupTestServer(t)
-	adminToken := unlock(t, url, "master")
+	adminToken := unlock(t, url, "master-password-12")
 
 	// Create proxy-scoped token
 	body, _ := json.Marshal(map[string]string{"scope": "proxy"})
@@ -422,5 +422,125 @@ func TestFilesProxyScopeBlocked(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("proxy token DELETE /files/{name}: expected 403, got %d", resp.StatusCode)
+	}
+}
+
+// SEC-002: Service name validation
+func TestServiceNameValidation(t *testing.T) {
+	_, url := setupTestServer(t)
+	token := unlock(t, url, "master-password-12")
+
+	tests := []struct {
+		name       string
+		svcName    string
+		wantStatus int
+	}{
+		{"valid name", "my-service_1.0", http.StatusCreated},
+		{"empty name", "", http.StatusBadRequest},
+		{"starts with hyphen", "-bad", http.StatusBadRequest},
+		{"starts with dot", ".hidden", http.StatusBadRequest},
+		{"contains slash", "a/b", http.StatusBadRequest},
+		{"contains space", "a b", http.StatusBadRequest},
+		{"too long", string(make([]byte, 129)), http.StatusBadRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := fmt.Sprintf(`{"name":%q,"base_url":"https://example.com","auth":{"type":"bearer","token":"t"}}`, tt.svcName)
+			req, _ := http.NewRequest("POST", url+"/services", bytes.NewReader([]byte(svc)))
+			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("request failed: %v", err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != tt.wantStatus {
+				t.Errorf("service name %q: got status %d, want %d", tt.svcName, resp.StatusCode, tt.wantStatus)
+			}
+		})
+	}
+}
+
+// SEC-003: Upstream response header filtering
+func TestProxyFiltersUpstreamHeaders(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Upstream tries to set dangerous headers
+		w.Header().Set("Set-Cookie", "evil=session; Path=/")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Content-Security-Policy", "unsafe-inline")
+		w.Header().Set("X-Custom-Header", "should-pass")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"ok":true}`)
+	}))
+	defer upstream.Close()
+
+	dir := t.TempDir()
+	store := vault.NewStore(dir)
+	server := NewServer(store, time.Hour)
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	token := unlock(t, ts.URL, "master-password-12")
+
+	svc := fmt.Sprintf(`{"name":"headersvc","base_url":"%s","auth":{"type":"bearer","token":"t"},"tls_skip_verify":true}`, upstream.URL)
+	req, _ := http.NewRequest("POST", ts.URL+"/services", bytes.NewReader([]byte(svc)))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	// Proxy request
+	req, _ = http.NewRequest("GET", ts.URL+"/proxy/headersvc/test", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, _ = http.DefaultClient.Do(req)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("proxy failed: %d", resp.StatusCode)
+	}
+
+	// Blocked upstream headers must not appear (Set-Cookie, CORS)
+	if v := resp.Header.Get("Set-Cookie"); v != "" {
+		t.Errorf("Set-Cookie should not be forwarded from upstream, got %q", v)
+	}
+	if v := resp.Header.Get("Access-Control-Allow-Origin"); v != "" {
+		t.Errorf("CORS header should not be forwarded from upstream, got %q", v)
+	}
+	// CSP is set by our middleware (default-src 'none'), upstream's "unsafe-inline" must not override
+	if csp := resp.Header.Get("Content-Security-Policy"); csp != "default-src 'none'" {
+		t.Errorf("CSP should be our middleware value, got %q", csp)
+	}
+
+	// Allowed headers must pass through
+	if v := resp.Header.Get("X-Custom-Header"); v != "should-pass" {
+		t.Errorf("expected X-Custom-Header=should-pass, got %q", v)
+	}
+}
+
+// SEC-004: Password minimum length on vault creation
+func TestPasswordMinLength(t *testing.T) {
+	_, url := setupTestServer(t)
+
+	// Short password should be rejected on first unlock (vault creation)
+	body, _ := json.Marshal(map[string]string{"password": "short"})
+	resp, err := http.Post(url+"/auth/unlock", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for short password, got %d", resp.StatusCode)
+	}
+
+	// 12-char password should succeed
+	body, _ = json.Marshal(map[string]string{"password": "long-enough-pw!"})
+	resp, err = http.Post(url+"/auth/unlock", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for valid password, got %d", resp.StatusCode)
 	}
 }

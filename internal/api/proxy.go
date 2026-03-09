@@ -21,6 +21,23 @@ const (
 	tokenExpiryBuffer  = 30       // seconds before expiry to trigger refresh
 )
 
+// blockedUpstreamHeaders are response headers from upstream that must not be
+// forwarded to the client (prevents cookie injection, CORS hijacking, etc).
+var blockedUpstreamHeaders = map[string]bool{
+	"set-cookie":                       true,
+	"access-control-allow-origin":      true,
+	"access-control-allow-credentials": true,
+	"access-control-allow-methods":     true,
+	"access-control-allow-headers":     true,
+	"access-control-expose-headers":    true,
+	"x-frame-options":                  true,
+	"content-security-policy":          true,
+	"strict-transport-security":        true,
+	"cross-origin-opener-policy":       true,
+	"cross-origin-resource-policy":     true,
+	"permissions-policy":               true,
+}
+
 // Dangerous headers that custom auth should never set.
 var deniedHeaders = map[string]bool{
 	"host":              true,
@@ -121,8 +138,11 @@ func (s *Server) proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("proxy %s %s /%s -> %d (%s) token=%s", r.Method, serviceName, apiPath, resp.StatusCode, duration, tokenID)
 
-	// Copy response headers
+	// Copy response headers, filtering out security-sensitive ones
 	for k, vv := range resp.Header {
+		if blockedUpstreamHeaders[strings.ToLower(k)] {
+			continue
+		}
 		for _, v := range vv {
 			w.Header().Add(k, v)
 		}
@@ -177,6 +197,13 @@ func (s *Server) getRefreshLock(serviceName string) *sync.Mutex {
 		s.refreshLocks[serviceName] = mu
 	}
 	return mu
+}
+
+// removeRefreshLock removes the per-service mutex when a service is deleted.
+func (s *Server) removeRefreshLock(serviceName string) {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	delete(s.refreshLocks, serviceName)
 }
 
 // ensureOAuth2Token returns a valid access token, refreshing if needed.

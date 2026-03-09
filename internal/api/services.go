@@ -7,10 +7,15 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/alessandrolamparelli/vault-proxy/internal/vault"
 )
+
+const maxServiceNameLen = 128
+
+var validServiceName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 
 // listServicesHandler handles GET /services
 func (s *Server) listServicesHandler(w http.ResponseWriter, r *http.Request) {
@@ -50,6 +55,10 @@ func (s *Server) addServiceHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"name, base_url, and auth.type are required"}`, http.StatusBadRequest)
 		return
 	}
+	if len(svc.Name) > maxServiceNameLen || !validServiceName.MatchString(svc.Name) {
+		http.Error(w, `{"error":"service name must be 1-128 chars, alphanumeric/hyphens/dots/underscores"}`, http.StatusBadRequest)
+		return
+	}
 
 	if err := validateBaseURL(svc.BaseURL, svc.TLSSkipVerify); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
@@ -80,6 +89,8 @@ func (s *Server) deleteServiceHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusNotFound)
 		return
 	}
+	// SEC-002: Clean up refresh lock to prevent unbounded map growth
+	s.removeRefreshLock(name)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 

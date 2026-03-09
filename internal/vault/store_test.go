@@ -9,7 +9,7 @@ func TestStoreUnlockCreateNew(t *testing.T) {
 	dir := t.TempDir()
 	s := NewStore(dir)
 
-	if err := s.Unlock([]byte("master")); err != nil {
+	if err := s.Unlock([]byte("master-password-12")); err != nil {
 		t.Fatalf("unlock new vault: %v", err)
 	}
 	if s.IsLocked() {
@@ -25,7 +25,7 @@ func TestStoreUnlockCreateNew(t *testing.T) {
 func TestStoreServiceCRUD(t *testing.T) {
 	dir := t.TempDir()
 	s := NewStore(dir)
-	s.Unlock([]byte("master"))
+	s.Unlock([]byte("master-password-12"))
 
 	// Add
 	svc := &Service{
@@ -70,7 +70,7 @@ func TestStorePersistence(t *testing.T) {
 
 	// Create and populate
 	s1 := NewStore(dir)
-	s1.Unlock([]byte("pass"))
+	s1.Unlock([]byte("pass-is-long-12x"))
 	s1.AddService(&Service{
 		Name: "test", BaseURL: "https://example.com",
 		Auth: Auth{Type: "bearer", Token: "secret"},
@@ -79,7 +79,7 @@ func TestStorePersistence(t *testing.T) {
 
 	// Reopen
 	s2 := NewStore(dir)
-	if err := s2.Unlock([]byte("pass")); err != nil {
+	if err := s2.Unlock([]byte("pass-is-long-12x")); err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
 
@@ -96,7 +96,7 @@ func TestStorePersistenceWrongPassword(t *testing.T) {
 	dir := t.TempDir()
 
 	s1 := NewStore(dir)
-	s1.Unlock([]byte("correct"))
+	s1.Unlock([]byte("correct-long-pw!"))
 	s1.AddService(&Service{Name: "x", BaseURL: "https://x.com", Auth: Auth{Type: "bearer", Token: "t"}})
 	s1.Lock()
 
@@ -124,7 +124,7 @@ func TestStoreLockedOperations(t *testing.T) {
 func TestStoreFileCRUD(t *testing.T) {
 	dir := t.TempDir()
 	s := NewStore(dir)
-	s.Unlock([]byte("master"))
+	s.Unlock([]byte("master-password-12"))
 
 	// Add
 	f := &File{
@@ -210,7 +210,7 @@ func TestStoreFilePersistence(t *testing.T) {
 
 	// Create and populate
 	s1 := NewStore(dir)
-	s1.Unlock([]byte("master"))
+	s1.Unlock([]byte("master-password-12"))
 	s1.AddFile(&File{
 		Name:     "secret.key",
 		MimeType: "application/octet-stream",
@@ -220,7 +220,7 @@ func TestStoreFilePersistence(t *testing.T) {
 
 	// Reopen
 	s2 := NewStore(dir)
-	if err := s2.Unlock([]byte("master")); err != nil {
+	if err := s2.Unlock([]byte("master-password-12")); err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
 
@@ -256,7 +256,7 @@ func TestStoreFileLockedOperations(t *testing.T) {
 func TestStoreUpdateServiceAuth(t *testing.T) {
 	dir := t.TempDir()
 	s := NewStore(dir)
-	s.Unlock([]byte("master"))
+	s.Unlock([]byte("master-password-12"))
 
 	// Setup: add a service with initial auth
 	svc := &Service{
@@ -294,7 +294,7 @@ func TestStoreUpdateServiceAuth(t *testing.T) {
 	// Persists through lock/unlock
 	s.Lock()
 	s2 := NewStore(dir)
-	if err := s2.Unlock([]byte("master")); err != nil {
+	if err := s2.Unlock([]byte("master-password-12")); err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
 	got, err = s2.GetService("github")

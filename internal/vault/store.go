@@ -39,7 +39,10 @@ func (s *Store) Unlock(password []byte) error {
 	path := filepath.Join(s.dataDir, vaultFile)
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		// First run: create empty vault
+		// First run: enforce minimum password strength
+		if len(password) < 12 {
+			return fmt.Errorf("master password must be at least 12 characters")
+		}
 		s.vault = &Vault{
 			Services: make(map[string]*Service),
 			Files:    make(map[string]*File),
@@ -56,6 +59,7 @@ func (s *Store) Unlock(password []byte) error {
 	if err != nil {
 		return err
 	}
+	defer wipeBytes(plaintext)
 
 	var v Vault
 	if err := json.Unmarshal(plaintext, &v); err != nil {
@@ -79,6 +83,15 @@ func (s *Store) Lock() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// SEC-005: Zero credential data before releasing to GC
+	if s.vault != nil {
+		for _, svc := range s.vault.Services {
+			wipeAuth(&svc.Auth)
+		}
+		for _, f := range s.vault.Files {
+			wipeBytes(f.Data)
+		}
+	}
 	s.vault = nil
 	// zero password
 	for i := range s.password {
@@ -86,6 +99,23 @@ func (s *Store) Lock() {
 	}
 	s.password = nil
 	s.locked = true
+}
+
+// wipeBytes zeroes a byte slice in place.
+func wipeBytes(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+}
+
+// wipeString overwrites a string's backing memory via unsafe conversion.
+// Since Go strings are immutable, we overwrite the underlying bytes.
+func wipeAuth(a *Auth) {
+	// Zero all sensitive string fields by overwriting with empty
+	// Note: Go strings are immutable; we can only nil the struct fields.
+	// The old string values remain in heap until GC, but this limits
+	// the window by dropping all references immediately.
+	*a = Auth{}
 }
 
 // IsLocked returns whether the vault is locked.
@@ -232,6 +262,7 @@ func (s *Store) saveLocked() error {
 	if err != nil {
 		return fmt.Errorf("marshal vault: %w", err)
 	}
+	defer wipeBytes(plaintext)
 
 	encrypted, err := crypto.Encrypt(plaintext, s.password)
 	if err != nil {
