@@ -51,6 +51,7 @@ func (s *Server) oauth2Authorize(w http.ResponseWriter, r *http.Request) {
 		BaseURL          string   `json:"base_url"`
 		Scopes           []string `json:"scopes"`
 		TLSSkipVerify    bool     `json:"tls_skip_verify,omitempty"`
+		RedirectURI      string   `json:"redirect_uri,omitempty"` // override redirect_uri from client_secret file
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodySize)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -78,17 +79,22 @@ func (s *Server) oauth2Authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(creds.RedirectURIs) == 0 {
+	// Determine redirect URI: explicit override > file-based selection.
+	var redirectURI string
+	if req.RedirectURI != "" {
+		// Caller-specified override — must be present in the file's redirect_uris for Google to accept it.
+		redirectURI = req.RedirectURI
+	} else if len(creds.RedirectURIs) == 0 {
 		http.Error(w, `{"error":"client_secret file has no redirect_uris configured"}`, http.StatusBadRequest)
 		return
-	}
-
-	// Find a localhost redirect URI, or use the first one
-	redirectURI := creds.RedirectURIs[0]
-	for _, uri := range creds.RedirectURIs {
-		if strings.Contains(uri, "localhost") || strings.Contains(uri, "127.0.0.1") {
-			redirectURI = uri
-			break
+	} else {
+		// Find a localhost redirect URI, or use the first one.
+		redirectURI = creds.RedirectURIs[0]
+		for _, uri := range creds.RedirectURIs {
+			if strings.Contains(uri, "localhost") || strings.Contains(uri, "127.0.0.1") {
+				redirectURI = uri
+				break
+			}
 		}
 	}
 

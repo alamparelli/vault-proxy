@@ -146,7 +146,17 @@ OAuth2 with automatic token refresh. Three setup modes: browser-based (easiest),
 
 ### Option A: Browser authorization (easiest for Google)
 
-Upload only the `client_secret_*.json` file. The vault handles the entire OAuth2 consent flow — opens a browser, receives the callback, gets the refresh token, and creates the service automatically.
+Upload only the `client_secret_*.json` file. The vault handles the entire OAuth2 consent flow — receives the callback, gets the refresh token, and creates the service automatically.
+
+**Prerequisites — Google Cloud Console:**
+
+1. Create an OAuth Client ID of type **Web application** (not "Desktop app")
+2. Add your callback URL as an **Authorized redirect URI**:
+   - Direct access: `http://localhost:8390/auth/oauth2/callback`
+   - Via reverse proxy (e.g. Alf Control Center): `https://your-domain/api/vault/oauth2/callback`
+3. Download the `client_secret_*.json` file
+
+> **Important**: "Desktop app" OAuth clients do not allow custom redirect URIs. You must use "Web application" type.
 
 **Step 1: Upload client secret file**
 
@@ -167,27 +177,30 @@ curl -X POST http://localhost:8400/auth/oauth2/authorize \
     "client_secret_file": "google-client-secret.json",
     "service_name": "google-gmail",
     "base_url": "https://gmail.googleapis.com",
-    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]
+    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+    "redirect_uri": "https://your-domain/api/vault/oauth2/callback"
   }'
 ```
+
+The optional `redirect_uri` field overrides the default (which picks a localhost URI from the client_secret file). Use this when the vault is behind a reverse proxy.
 
 Response:
 ```json
 {
   "auth_url": "https://accounts.google.com/o/oauth2/v2/auth?...",
   "state": "abc123...",
-  "redirect_uri": "http://localhost:...",
+  "redirect_uri": "https://your-domain/api/vault/oauth2/callback",
   "message": "Open auth_url in your browser to authorize."
 }
 ```
 
 **Step 3: Open `auth_url` in your browser**
 
-Authorize the app. Google redirects back to the vault's callback endpoint. The vault exchanges the code for tokens and creates the service automatically. You see a success page in the browser.
+Authorize the app. Google redirects back to the callback endpoint. The vault exchanges the code for tokens and creates the service automatically. You see a success page in the browser.
 
 No `token.json` needed. The vault gets the refresh token directly from Google.
 
-The authorization link expires after 5 minutes. The `redirect_uri` in the client_secret file must point to localhost (standard for desktop OAuth2 apps).
+The authorization link expires after 5 minutes.
 
 ### Option B: File-based setup
 
