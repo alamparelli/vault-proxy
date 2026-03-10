@@ -16,7 +16,7 @@ type Service struct {
 
 // Auth holds credentials for a service.
 type Auth struct {
-	Type string `json:"type"` // bearer, header, basic, oauth2_client, service_account
+	Type string `json:"type"` // bearer, header, basic, oauth2_client, google_oauth2, service_account
 
 	// bearer
 	Token string `json:"token,omitempty"`
@@ -37,6 +37,10 @@ type Auth struct {
 	AccessToken  string   `json:"access_token,omitempty"`
 	ExpiresAt    int64    `json:"expires_at,omitempty"` // unix timestamp
 	Scopes       []string `json:"scopes,omitempty"`
+
+	// google_oauth2 (file-based setup, resolved to oauth2_client fields)
+	ClientSecretFile string `json:"client_secret_file,omitempty"` // references Files entry
+	TokenFile        string `json:"token_file,omitempty"`         // references Files entry
 
 	// service_account
 	FileRef     string   `json:"file_ref,omitempty"`        // references Files entry

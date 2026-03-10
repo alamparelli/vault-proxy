@@ -72,6 +72,9 @@ func NewServer(store *vault.Store, tokenTTL time.Duration) *Server {
 
 	safeTransport := http.DefaultTransport.(*http.Transport).Clone()
 	safeTransport.DialContext = ssrfSafeDialContext
+	// Disable system HTTP proxy — we do our own SSRF validation at DNS level.
+	// Using an HTTP proxy (often on 127.0.0.1) conflicts with private-IP blocking.
+	safeTransport.Proxy = nil
 
 	insecureTransport := http.DefaultTransport.(*http.Transport).Clone()
 	insecureTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}

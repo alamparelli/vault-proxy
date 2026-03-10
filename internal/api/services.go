@@ -109,6 +109,14 @@ func (s *Server) validateAuthType(svc *vault.Service) error {
 		if svc.Auth.Username == "" || svc.Auth.Password == "" {
 			return fmt.Errorf("basic auth requires username and password")
 		}
+	case "google_oauth2":
+		if err := s.resolveGoogleOAuth2(svc); err != nil {
+			return err
+		}
+		// After resolution, validate like oauth2_client
+		if err := validateBaseURL(svc.Auth.TokenURL, svc.TLSSkipVerify); err != nil {
+			return fmt.Errorf("invalid token_url: %w", err)
+		}
 	case "oauth2_client":
 		if svc.Auth.ClientID == "" || svc.Auth.ClientSecret == "" || svc.Auth.TokenURL == "" || svc.Auth.RefreshToken == "" {
 			return fmt.Errorf("oauth2_client requires client_id, client_secret, token_url, and refresh_token")
@@ -133,6 +141,71 @@ func (s *Server) validateAuthType(svc *vault.Service) error {
 		return fmt.Errorf("unsupported auth type: %s", svc.Auth.Type)
 	}
 	return nil
+}
+
+// resolveGoogleOAuth2 reads the uploaded Google client_secret and token files,
+// extracts credentials, and converts the auth type to oauth2_client for runtime use.
+func (s *Server) resolveGoogleOAuth2(svc *vault.Service) error {
+	if svc.Auth.ClientSecretFile == "" || svc.Auth.TokenFile == "" {
+		return fmt.Errorf("google_oauth2 requires client_secret_file and token_file")
+	}
+
+	// Parse client_secret file
+	csFile, err := s.store.GetFile(svc.Auth.ClientSecretFile)
+	if err != nil {
+		return fmt.Errorf("client_secret_file %q: %w", svc.Auth.ClientSecretFile, err)
+	}
+	var csJSON struct {
+		Installed *googleClientCredentials `json:"installed"`
+		Web       *googleClientCredentials `json:"web"`
+	}
+	if err := json.Unmarshal(csFile.Data, &csJSON); err != nil {
+		return fmt.Errorf("parse client_secret file: %w", err)
+	}
+	creds := csJSON.Installed
+	if creds == nil {
+		creds = csJSON.Web
+	}
+	if creds == nil || creds.ClientID == "" || creds.ClientSecret == "" {
+		return fmt.Errorf("client_secret file missing client_id or client_secret (expected 'installed' or 'web' key)")
+	}
+
+	// Parse token file
+	tokenFile, err := s.store.GetFile(svc.Auth.TokenFile)
+	if err != nil {
+		return fmt.Errorf("token_file %q: %w", svc.Auth.TokenFile, err)
+	}
+	var tokenJSON struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.Unmarshal(tokenFile.Data, &tokenJSON); err != nil {
+		return fmt.Errorf("parse token file: %w", err)
+	}
+	if tokenJSON.RefreshToken == "" {
+		return fmt.Errorf("token file missing refresh_token")
+	}
+
+	// Determine token URL
+	tokenURL := "https://oauth2.googleapis.com/token"
+	if len(creds.TokenURI) > 0 {
+		tokenURL = creds.TokenURI
+	}
+
+	// Resolve: populate oauth2_client fields and switch type
+	svc.Auth.Type = "oauth2_client"
+	svc.Auth.ClientID = creds.ClientID
+	svc.Auth.ClientSecret = creds.ClientSecret
+	svc.Auth.RefreshToken = tokenJSON.RefreshToken
+	svc.Auth.TokenURL = tokenURL
+
+	return nil
+}
+
+// googleClientCredentials represents the nested credentials in a Google client_secret JSON.
+type googleClientCredentials struct {
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+	TokenURI     string `json:"token_uri"`
 }
 
 // validateBaseURL ensures the URL is HTTPS and does not resolve to private/internal IPs.
