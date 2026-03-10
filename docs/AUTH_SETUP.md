@@ -1,8 +1,8 @@
 # Authentication Setup Guide
 
-This document covers how to configure each authentication method in vault-proxy. All examples assume the vault server runs at `http://localhost:8400` and you have an admin token.
+This document covers how to configure each authentication method in vault-proxy. All examples assume the vault server runs at `http://localhost:8390` and you have an admin token.
 
-Base URL: `http://localhost:8400`
+Base URL: `http://localhost:8390`
 Admin header: `Authorization: Bearer ADMIN_TOKEN`
 
 ---
@@ -14,7 +14,7 @@ Some auth types reference files stored in the vault. Upload files before creatin
 ### Upload a file
 
 ```bash
-curl -X POST http://localhost:8400/files \
+curl -X POST http://localhost:8390/files \
   -H "Authorization: Bearer ADMIN_TOKEN" \
   -F "name=my-credentials.json" \
   -F "file=@/path/to/my-credentials.json"
@@ -23,14 +23,14 @@ curl -X POST http://localhost:8400/files \
 ### List files
 
 ```bash
-curl http://localhost:8400/files \
+curl http://localhost:8390/files \
   -H "Authorization: Bearer ADMIN_TOKEN"
 ```
 
 ### Delete a file
 
 ```bash
-curl -X DELETE http://localhost:8400/files/my-credentials.json \
+curl -X DELETE http://localhost:8390/files/my-credentials.json \
   -H "Authorization: Bearer ADMIN_TOKEN"
 ```
 
@@ -49,7 +49,7 @@ Simple static bearer token. Use when the API gives you a long-lived API key or t
 ### Example
 
 ```bash
-curl -X POST http://localhost:8400/services \
+curl -X POST http://localhost:8390/services \
   -H "Authorization: Bearer ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -86,7 +86,7 @@ The following headers cannot be used: `host`, `transfer-encoding`, `content-leng
 ### Example
 
 ```bash
-curl -X POST http://localhost:8400/services \
+curl -X POST http://localhost:8390/services \
   -H "Authorization: Bearer ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -120,7 +120,7 @@ HTTP Basic authentication. Use for APIs that require username/password auth.
 ### Example
 
 ```bash
-curl -X POST http://localhost:8400/services \
+curl -X POST http://localhost:8390/services \
   -H "Authorization: Bearer ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -161,7 +161,7 @@ Upload only the `client_secret_*.json` file. The vault handles the entire OAuth2
 **Step 1: Upload client secret file**
 
 ```bash
-curl -X POST http://localhost:8400/files \
+curl -X POST http://localhost:8390/files \
   -H "Authorization: Bearer ADMIN_TOKEN" \
   -F "name=google-client-secret.json" \
   -F "file=@/path/to/client_secret_1234.apps.googleusercontent.com.json"
@@ -170,7 +170,7 @@ curl -X POST http://localhost:8400/files \
 **Step 2: Start the authorization flow**
 
 ```bash
-curl -X POST http://localhost:8400/auth/oauth2/authorize \
+curl -X POST http://localhost:8390/auth/oauth2/authorize \
   -H "Authorization: Bearer ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -209,12 +209,12 @@ Upload both `client_secret_*.json` and `token.json` files. Use this if you alrea
 **Step 1: Upload files**
 
 ```bash
-curl -X POST http://localhost:8400/files \
+curl -X POST http://localhost:8390/files \
   -H "Authorization: Bearer ADMIN_TOKEN" \
   -F "name=google-client-secret.json" \
   -F "file=@/path/to/client_secret_1234.apps.googleusercontent.com.json"
 
-curl -X POST http://localhost:8400/files \
+curl -X POST http://localhost:8390/files \
   -H "Authorization: Bearer ADMIN_TOKEN" \
   -F "name=google-token.json" \
   -F "file=@/path/to/token.json"
@@ -223,7 +223,7 @@ curl -X POST http://localhost:8400/files \
 **Step 2: Create service**
 
 ```bash
-curl -X POST http://localhost:8400/services \
+curl -X POST http://localhost:8390/services \
   -H "Authorization: Bearer ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -265,7 +265,7 @@ The vault reads both files, extracts `client_id`, `client_secret`, `refresh_toke
 Provide credentials directly. Works with any OAuth2 provider (Google, GitHub, etc).
 
 ```bash
-curl -X POST http://localhost:8400/services \
+curl -X POST http://localhost:8390/services \
   -H "Authorization: Bearer ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -319,7 +319,7 @@ Download the service account key JSON from Google Cloud Console > IAM > Service 
 ### Step 1: Upload the service account key file
 
 ```bash
-curl -X POST http://localhost:8400/files \
+curl -X POST http://localhost:8390/files \
   -H "Authorization: Bearer ADMIN_TOKEN" \
   -F "name=my-sa-key.json" \
   -F "file=@/path/to/service-account-key.json"
@@ -328,7 +328,7 @@ curl -X POST http://localhost:8400/files \
 ### Step 2: Create the service
 
 ```bash
-curl -X POST http://localhost:8400/services \
+curl -X POST http://localhost:8390/services \
   -H "Authorization: Bearer ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -381,11 +381,11 @@ Once a service is configured, make requests through the proxy. The vault injects
 
 ```bash
 # Proxy a GET request to the "google-gmail" service
-curl http://localhost:8400/proxy/google-gmail/gmail/v1/users/me/messages \
+curl http://localhost:8390/proxy/google-gmail/gmail/v1/users/me/messages \
   -H "Authorization: Bearer PROXY_TOKEN"
 
 # Proxy a POST request
-curl -X POST http://localhost:8400/proxy/openai/v1/chat/completions \
+curl -X POST http://localhost:8390/proxy/openai/v1/chat/completions \
   -H "Authorization: Bearer PROXY_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"model": "gpt-4", "messages": [{"role": "user", "content": "hello"}]}'
@@ -431,7 +431,7 @@ The vault uses two token scopes:
 Create a proxy-scoped token for clients that only need to make API calls:
 
 ```bash
-curl -X POST http://localhost:8400/tokens \
+curl -X POST http://localhost:8390/tokens \
   -H "Authorization: Bearer ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"scope": "proxy"}'
