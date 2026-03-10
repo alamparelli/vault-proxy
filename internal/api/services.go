@@ -109,17 +109,15 @@ func (s *Server) validateAuthType(svc *vault.Service) error {
 		if svc.Auth.Username == "" || svc.Auth.Password == "" {
 			return fmt.Errorf("basic auth requires username and password")
 		}
-	case "google_oauth2":
-		if err := s.resolveGoogleOAuth2(svc); err != nil {
-			return err
-		}
-		// After resolution, validate like oauth2_client
-		if err := validateBaseURL(svc.Auth.TokenURL, svc.TLSSkipVerify); err != nil {
-			return fmt.Errorf("invalid token_url: %w", err)
-		}
 	case "oauth2_client":
+		// If file refs are provided, resolve from uploaded Google files
+		if svc.Auth.ClientSecretFile != "" || svc.Auth.TokenFile != "" {
+			if err := s.resolveGoogleOAuth2(svc); err != nil {
+				return err
+			}
+		}
 		if svc.Auth.ClientID == "" || svc.Auth.ClientSecret == "" || svc.Auth.TokenURL == "" || svc.Auth.RefreshToken == "" {
-			return fmt.Errorf("oauth2_client requires client_id, client_secret, token_url, and refresh_token")
+			return fmt.Errorf("oauth2_client requires client_id, client_secret, token_url, and refresh_token (or client_secret_file + token_file)")
 		}
 		if err := validateBaseURL(svc.Auth.TokenURL, svc.TLSSkipVerify); err != nil {
 			return fmt.Errorf("invalid token_url: %w", err)
@@ -143,11 +141,11 @@ func (s *Server) validateAuthType(svc *vault.Service) error {
 	return nil
 }
 
-// resolveGoogleOAuth2 reads the uploaded Google client_secret and token files,
-// extracts credentials, and converts the auth type to oauth2_client for runtime use.
+// resolveGoogleOAuth2 reads the uploaded Google client_secret and token files
+// and populates the oauth2_client fields (client_id, client_secret, refresh_token, token_url).
 func (s *Server) resolveGoogleOAuth2(svc *vault.Service) error {
 	if svc.Auth.ClientSecretFile == "" || svc.Auth.TokenFile == "" {
-		return fmt.Errorf("google_oauth2 requires client_secret_file and token_file")
+		return fmt.Errorf("both client_secret_file and token_file are required when using file-based setup")
 	}
 
 	// Parse client_secret file
@@ -191,8 +189,7 @@ func (s *Server) resolveGoogleOAuth2(svc *vault.Service) error {
 		tokenURL = creds.TokenURI
 	}
 
-	// Resolve: populate oauth2_client fields and switch type
-	svc.Auth.Type = "oauth2_client"
+	// Populate oauth2_client fields from files
 	svc.Auth.ClientID = creds.ClientID
 	svc.Auth.ClientSecret = creds.ClientSecret
 	svc.Auth.RefreshToken = tokenJSON.RefreshToken
