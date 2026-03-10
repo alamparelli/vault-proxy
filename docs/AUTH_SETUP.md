@@ -142,11 +142,56 @@ Every proxied request gets an `Authorization: Basic <base64(user:pass)>` header.
 
 ## Auth Type: `oauth2_client`
 
-OAuth2 with automatic token refresh. Supports two setup modes: upload Google files or provide fields manually.
+OAuth2 with automatic token refresh. Three setup modes: browser-based (easiest), file-based, or manual.
 
-### Option A: File-based setup (Google)
+### Option A: Browser authorization (easiest for Google)
 
-Upload your Google `client_secret_*.json` and `token.json` files. The vault extracts credentials automatically.
+Upload only the `client_secret_*.json` file. The vault handles the entire OAuth2 consent flow — opens a browser, receives the callback, gets the refresh token, and creates the service automatically.
+
+**Step 1: Upload client secret file**
+
+```bash
+curl -X POST http://localhost:8400/files \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
+  -F "name=google-client-secret.json" \
+  -F "file=@/path/to/client_secret_1234.apps.googleusercontent.com.json"
+```
+
+**Step 2: Start the authorization flow**
+
+```bash
+curl -X POST http://localhost:8400/auth/oauth2/authorize \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "client_secret_file": "google-client-secret.json",
+    "service_name": "google-gmail",
+    "base_url": "https://gmail.googleapis.com",
+    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]
+  }'
+```
+
+Response:
+```json
+{
+  "auth_url": "https://accounts.google.com/o/oauth2/v2/auth?...",
+  "state": "abc123...",
+  "redirect_uri": "http://localhost:...",
+  "message": "Open auth_url in your browser to authorize."
+}
+```
+
+**Step 3: Open `auth_url` in your browser**
+
+Authorize the app. Google redirects back to the vault's callback endpoint. The vault exchanges the code for tokens and creates the service automatically. You see a success page in the browser.
+
+No `token.json` needed. The vault gets the refresh token directly from Google.
+
+The authorization link expires after 5 minutes. The `redirect_uri` in the client_secret file must point to localhost (standard for desktop OAuth2 apps).
+
+### Option B: File-based setup
+
+Upload both `client_secret_*.json` and `token.json` files. Use this if you already have a `token.json` from a previous OAuth2 flow.
 
 **Step 1: Upload files**
 
@@ -180,7 +225,7 @@ curl -X POST http://localhost:8400/services \
   }'
 ```
 
-At creation, the vault reads both files, extracts `client_id`, `client_secret`, `refresh_token`, and `token_url`, then stores them as standard `oauth2_client` fields.
+The vault reads both files, extracts `client_id`, `client_secret`, `refresh_token`, and `token_url`, then stores them as standard `oauth2_client` fields.
 
 **Expected file formats:**
 
@@ -202,7 +247,7 @@ At creation, the vault reads both files, extracts `client_id`, `client_secret`, 
 }
 ```
 
-### Option B: Manual fields
+### Option C: Manual fields
 
 Provide credentials directly. Works with any OAuth2 provider (Google, GitHub, etc).
 
@@ -236,7 +281,7 @@ curl -X POST http://localhost:8400/services \
 | `token_file` | Alt* | Name of uploaded Google token file |
 | `scopes` | No | OAuth2 scopes to request on refresh |
 
-*Provide either (`client_id` + `client_secret` + `refresh_token` + `token_url`) or (`client_secret_file` + `token_file`).
+*Provide either (`client_id` + `client_secret` + `refresh_token` + `token_url`), or (`client_secret_file` + `token_file`), or use the browser flow via `/auth/oauth2/authorize`.
 
 ### Behavior
 

@@ -41,6 +41,10 @@ type Server struct {
 	unlockMu       sync.Mutex
 	unlockFailures int
 	unlockLockout  time.Time
+
+	// Pending OAuth2 interactive flows
+	pendingFlows   map[string]*pendingOAuth2Flow
+	pendingFlowsMu sync.Mutex
 }
 
 // NewServer creates a new API server.
@@ -85,6 +89,7 @@ func NewServer(store *vault.Store, tokenTTL time.Duration) *Server {
 		tokens:       NewTokenStore(tokenTTL),
 		mux:          http.NewServeMux(),
 		refreshLocks: make(map[string]*sync.Mutex),
+		pendingFlows: make(map[string]*pendingOAuth2Flow),
 		proxyClient: &http.Client{
 			Timeout:       30 * time.Second,
 			Transport:     safeTransport,
@@ -112,6 +117,10 @@ func (s *Server) routes() {
 	// Services (GET = proxy scope, mutations = admin scope)
 	s.mux.HandleFunc("/services", s.servicesRouter)
 	s.mux.HandleFunc("/services/", s.requireAuth(ScopeProxy, s.servicesDetailRouter))
+
+	// OAuth2 interactive flow (admin scope, callback is unauthenticated)
+	s.mux.HandleFunc("/auth/oauth2/authorize", s.requireAuth(ScopeAdmin, s.oauth2Authorize))
+	s.mux.HandleFunc("/auth/oauth2/callback", s.oauth2Callback)
 
 	// Files (admin scope)
 	s.mux.HandleFunc("/files", s.requireAuth(ScopeAdmin, s.filesRouter))
