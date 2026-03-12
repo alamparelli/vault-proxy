@@ -40,8 +40,8 @@ func (s *Store) Unlock(password []byte) error {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		// First run: enforce minimum password strength
-		if len(password) < 12 {
-			return fmt.Errorf("master password must be at least 12 characters")
+		if len(password) < 8 {
+			return fmt.Errorf("master password must be at least 8 characters")
 		}
 		s.vault = &Vault{
 			Services: make(map[string]*Service),
