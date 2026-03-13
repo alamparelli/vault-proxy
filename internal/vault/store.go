@@ -40,8 +40,8 @@ func (s *Store) Unlock(password []byte) error {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		// First run: enforce minimum password strength
-		if len(password) < 8 {
-			return fmt.Errorf("master password must be at least 8 characters")
+		if len(password) < 12 {
+			return fmt.Errorf("master password must be at least 12 characters")
 		}
 		s.vault = &Vault{
 			Services: make(map[string]*Service),
@@ -277,8 +277,13 @@ func (s *Store) saveLocked() error {
 		_ = os.Rename(path, backupPath)
 	}
 
-	if err := os.WriteFile(path, encrypted, 0600); err != nil {
+	// atomic write: write to temp file, then rename into place
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, encrypted, 0600); err != nil {
 		return fmt.Errorf("write vault file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("rename vault file: %w", err)
 	}
 	return nil
 }

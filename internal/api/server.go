@@ -81,8 +81,9 @@ func NewServer(store *vault.Store, tokenTTL time.Duration) *Server {
 	safeTransport.Proxy = nil
 
 	insecureTransport := http.DefaultTransport.(*http.Transport).Clone()
+	insecureTransport.DialContext = ssrfSafeDialContext
+	insecureTransport.Proxy = nil
 	insecureTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-	// Insecure transport skips SSRF IP check (intended for internal/self-signed services)
 
 	s := &Server{
 		store:        store,
@@ -101,6 +102,7 @@ func NewServer(store *vault.Store, tokenTTL time.Duration) *Server {
 			CheckRedirect: noRedirect,
 		},
 	}
+	s.tokens.StartCleanup(5 * time.Minute)
 	s.routes()
 	return s
 }

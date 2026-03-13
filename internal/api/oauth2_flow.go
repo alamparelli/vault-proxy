@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net/http"
@@ -184,7 +185,7 @@ func (s *Server) oauth2Callback(w http.ResponseWriter, r *http.Request) {
 	if errParam != "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "<html><body><h2>Authorization failed</h2><p>%s</p><p>You can close this tab.</p></body></html>", errParam)
+		fmt.Fprintf(w, "<html><body><h2>Authorization failed</h2><p>%s</p><p>You can close this tab.</p></body></html>", html.EscapeString(errParam))
 		return
 	}
 
@@ -261,12 +262,13 @@ func (s *Server) oauth2Callback(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
+	escapedName := html.EscapeString(flow.ServiceName)
 	fmt.Fprintf(w, `<html><body>
 <h2>Authorization successful</h2>
 <p>Service <strong>%s</strong> has been created and is ready to use.</p>
 <p>You can now proxy requests to: <code>/proxy/%s/...</code></p>
 <p>You can close this tab.</p>
-</body></html>`, flow.ServiceName, flow.ServiceName)
+</body></html>`, escapedName, escapedName)
 }
 
 // exchangeAuthCode exchanges an authorization code for access and refresh tokens.

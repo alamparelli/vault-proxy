@@ -2,54 +2,147 @@
 
 Self-hosted secrets vault with HTTP proxy for authenticated API calls. Two binaries, zero runtime dependencies, single encrypted file for storage.
 
-Credentials never leave the vault — the proxy injects them server-side. AI agents and tools call APIs through the proxy without ever seeing API keys.
+Credentials never leave the vault -- the proxy injects them server-side. AI agents and tools call APIs through the proxy without ever seeing API keys.
+
+```
+Agent --> vault-proxy --> api.openai.com
+              |
+         injects real
+         credentials
+```
+
+## Why vault-proxy?
+
+AI agents need API keys to call external services. Embedding keys in agent code or environment variables is risky -- leaked prompts, log files, or subprocess access can expose them.
+
+vault-proxy sits between your agent and the API. The agent authenticates with a scoped token that can only proxy requests, never read secrets. The vault handles credential injection, OAuth2 token refresh, and service account JWT exchange automatically.
 
 ## Features
 
 - **AES-256-GCM encryption** at rest (key derived from master password via Argon2id)
 - **HTTP proxy** with automatic credential injection (bearer, header, basic, OAuth2, service account)
-- **OAuth2 token refresh** — lazy refresh at proxy time, tokens persist across restarts
-- **Service account JWT exchange** — Google SA key files stored encrypted, RS256 JWT signed with stdlib
-- **Encrypted file storage** — store credential files (SA JSONs, client secrets) in the vault
-- **Scoped tokens** — `admin` for full CRUD, `proxy` for API calls only (safe to give to AI agents)
-- **Zero runtime dependencies** — single static binary, no database, no external services
+- **OAuth2 token refresh** -- lazy refresh at proxy time, tokens persist across restarts
+- **Service account JWT exchange** -- Google SA key files stored encrypted, RS256 JWT signed with stdlib
+- **Encrypted file storage** -- store credential files (SA JSONs, client secrets) in the vault
+- **Scoped tokens** -- `admin` for full CRUD, `proxy` for API calls only (safe to give to AI agents)
+- **Zero runtime dependencies** -- single static binary, no database, no external services
+- **Go SDK** -- `pkg/client` is importable by any Go project
+- **[Python SDK](https://github.com/alamparelli/vault-proxy-python)** -- `pip install vault-proxy`
 
 ## Quick Start
 
-### Build
+### Option A: Docker (recommended)
+
+```bash
+docker run -d --name vault \
+  -p 8390:8390 \
+  -v vault-data:/data \
+  ghcr.io/alamparelli/vault-proxy:latest
+```
+
+Or with Docker Compose:
+
+```bash
+git clone https://github.com/alamparelli/vault-proxy
+cd vault-proxy
+docker compose up -d
+```
+
+### Option B: Build from source
 
 ```bash
 git clone https://github.com/alamparelli/vault-proxy
 cd vault-proxy
 go build -o vault-server ./cmd/vault-server
 go build -o vault-cli ./cmd/vault-cli
-```
-
-### Start the server
-
-```bash
 ./vault-server --listen 127.0.0.1:8390 --data-dir ~/.vault-proxy
 ```
 
-### Unlock (creates vault on first use)
+Requires Go 1.24+.
+
+### Setup
 
 ```bash
+# Unlock (creates vault on first use)
 ./vault-cli unlock
 # Enter master password when prompted
-# Session token saved to ~/.vault-proxy/session
-```
 
-### Add a service
-
-```bash
-# Bearer token auth (most APIs)
+# Add a service
 ./vault-cli service add '{
   "name": "openrouter",
   "base_url": "https://openrouter.ai/api",
   "auth": {"type": "bearer", "token": "sk-or-v1-xxxxx"}
 }'
 
-# Custom header auth
+# Create a proxy token for your agent
+./vault-cli token create proxy
+# Output: tok_abc123... (give this to your agent)
+
+# Proxy a request
+./vault-cli proxy openrouter POST /v1/chat/completions \
+  '{"model":"anthropic/claude-haiku-4-5","messages":[{"role":"user","content":"hello"}]}'
+```
+
+## SDKs
+
+### Go
+
+```go
+import "github.com/alamparelli/vault-proxy/pkg/client"
+
+c := client.New() // reads VAULT_ADDR + VAULT_TOKEN from env
+resp, err := c.Proxy("openrouter", "POST", "/v1/chat/completions", body)
+```
+
+### Python
+
+```bash
+pip install vault-proxy
+```
+
+```python
+from vault_proxy import VaultClient
+
+client = VaultClient()  # reads VAULT_ADDR + VAULT_TOKEN from env
+resp = client.proxy("openrouter", "POST", "/v1/chat/completions", json={
+    "model": "anthropic/claude-haiku-4-5",
+    "messages": [{"role": "user", "content": "hello"}],
+})
+print(resp.json())
+```
+
+### Any language (HTTP)
+
+```bash
+curl -X POST http://127.0.0.1:8390/proxy/openrouter/v1/chat/completions \
+  -H "Authorization: Bearer $VAULT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"...","messages":[...]}'
+```
+
+## Auth Types
+
+| Type | Use case | Auto-refresh |
+|------|----------|:------------:|
+| `bearer` | Static API keys (OpenAI, Anthropic, etc.) | No |
+| `header` | Custom header auth (`X-API-Key`, etc.) | No |
+| `basic` | Username/password (Jira, Confluence, etc.) | No |
+| `oauth2_client` | OAuth2 with refresh token (Google APIs, etc.) | Yes |
+| `service_account` | Google service account JWT exchange | Yes |
+
+See [docs/AUTH_SETUP.md](docs/AUTH_SETUP.md) for detailed setup instructions for each auth type, including OAuth2 browser flow and file-based setup.
+
+### Examples
+
+```bash
+# Bearer token (most APIs)
+./vault-cli service add '{
+  "name": "openrouter",
+  "base_url": "https://openrouter.ai/api",
+  "auth": {"type": "bearer", "token": "sk-or-v1-xxxxx"}
+}'
+
+# Custom header
 ./vault-cli service add '{
   "name": "anthropic",
   "base_url": "https://api.anthropic.com",
@@ -70,7 +163,7 @@ go build -o vault-cli ./cmd/vault-cli
   }
 }'
 
-# Google service account (upload SA key file first)
+# Google service account
 ./vault-cli file upload my-sa-key service-account.json
 ./vault-cli service add '{
   "name": "bigquery",
@@ -83,28 +176,6 @@ go build -o vault-cli ./cmd/vault-cli
 }'
 ```
 
-### Proxy a request
-
-The vault injects credentials automatically. Your code never sees the secrets.
-
-```bash
-# Shorthand
-./vault-cli proxy openrouter POST /v1/chat/completions \
-  '{"model":"anthropic/claude-haiku-4-5","messages":[{"role":"user","content":"hello"}]}'
-
-# Full syntax
-./vault-cli http --service openrouter --method POST \
-  --path /v1/chat/completions \
-  --body '{"model":"anthropic/claude-haiku-4-5","messages":[...]}'
-```
-
-### Lock when done
-
-```bash
-./vault-cli lock
-# Clears all secrets from memory, revokes all tokens
-```
-
 ## Token Scopes
 
 | Scope | Can do | Use case |
@@ -113,13 +184,8 @@ The vault injects credentials automatically. Your code never sees the secrets.
 | `proxy` | Proxy requests, list services (no secrets), health | AI agents, tools |
 
 ```bash
-# Create a proxy-only token for an AI agent
-./vault-cli token create proxy
-
-# List active tokens
+./vault-cli token create proxy    # Safe to give to AI agents
 ./vault-cli token list
-
-# Revoke a token
 ./vault-cli token revoke a64f2e...
 ```
 
@@ -132,21 +198,6 @@ Store credential files (service account JSONs, client secrets) encrypted in the 
 ./vault-cli file list
 ./vault-cli file download google-secret output.json
 ./vault-cli file delete google-secret
-```
-
-## Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `VAULT_ADDR` | `http://127.0.0.1:8390` | Server address |
-| `VAULT_TOKEN` | — | Session token (overrides `~/.vault-proxy/session`) |
-
-## Server Flags
-
-```
---listen    Address to listen on (default: 127.0.0.1:8390)
---data-dir  Directory for vault.enc (default: ~/.vault-proxy)
---token-ttl Token TTL (default: 24h)
 ```
 
 ## API Reference
@@ -168,36 +219,52 @@ Store credential files (service account JSONs, client secrets) encrypted in the 
 | `POST` | `/tokens` | admin | Create token |
 | `GET` | `/tokens` | admin | List tokens |
 | `DELETE` | `/tokens/{id}` | admin | Revoke token |
+| `POST` | `/auth/oauth2/authorize` | admin | Start OAuth2 browser flow |
+| `GET` | `/auth/oauth2/callback` | none | OAuth2 callback (browser redirect) |
 
-## Using from Go
+## Configuration
 
-```go
-import "github.com/alamparelli/vault-proxy/pkg/client"
+### Environment Variables
 
-c := client.New() // reads VAULT_ADDR + VAULT_TOKEN from env
-resp, err := c.Proxy("openrouter", "POST", "/v1/chat/completions", body)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VAULT_ADDR` | `http://127.0.0.1:8390` | Server address |
+| `VAULT_TOKEN` | -- | Session token (overrides `~/.vault-proxy/session`) |
+
+### Server Flags
+
 ```
-
-## Using from any language
-
-```bash
-curl -X POST http://127.0.0.1:8390/proxy/openrouter/v1/chat/completions \
-  -H "Authorization: Bearer $VAULT_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"...","messages":[...]}'
+--listen    Address to listen on (default: 127.0.0.1:8390)
+--data-dir  Directory for vault.enc (default: ~/.vault-proxy)
+--token-ttl Token TTL (default: 24h)
 ```
 
 ## Security
 
-- Server binds to `127.0.0.1` only — never exposed externally
+- Server binds to `127.0.0.1` only -- never exposed externally
 - All credentials encrypted at rest with AES-256-GCM (key from Argon2id)
 - Proxy tokens can call APIs but never read or modify secrets
 - Caller's `Authorization` header is stripped before forwarding
 - SSRF protection: private/loopback/link-local IPs blocked, HTTPS enforced
 - Brute-force protection on unlock with exponential backoff
-- Every proxy call logged (service, method, path, status, duration — never credentials)
+- Every proxy call logged (service, method, path, status, duration -- never credentials)
 - `vault.enc.bak` backup created on every save
 - Master password lost = no recovery
+
+## Project Structure
+
+```
+cmd/
+  vault-server/    Server binary (HTTP API + proxy)
+  vault-cli/       CLI binary (human + AI agent interface)
+internal/
+  api/             HTTP handlers, auth middleware, proxy
+  crypto/          AES-256-GCM encryption, Argon2id KDF
+  oauth2/          OAuth2 refresh + service account JWT exchange
+  vault/           Encrypted store, types
+pkg/
+  client/          Go SDK (importable by any Go project)
+```
 
 ## License
 

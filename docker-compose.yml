@@ -1,0 +1,11 @@
+services:
+  vault:
+    build: .
+    ports:
+      - "8390:8390"
+    volumes:
+      - vault-data:/data
+    restart: unless-stopped
+
+volumes:
+  vault-data:

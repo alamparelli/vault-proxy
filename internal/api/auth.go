@@ -48,6 +48,17 @@ func NewTokenStore(ttl time.Duration) *TokenStore {
 	}
 }
 
+// StartCleanup runs a background goroutine that periodically purges expired tokens.
+func (ts *TokenStore) StartCleanup(interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for range ticker.C {
+			ts.List() // List already purges expired tokens
+		}
+	}()
+}
+
 // Create generates a new token with the given scope.
 func (ts *TokenStore) Create(scope TokenScope) (*Token, error) {
 	raw := make([]byte, 32)
