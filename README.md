@@ -4,7 +4,7 @@ Self-hosted secrets vault with HTTP proxy for authenticated API calls. Two binar
 
 Credentials never leave the vault -- the proxy injects them server-side. AI agents and tools call APIs through the proxy without ever seeing API keys.
 
-https://github.com/alamparelli/vault-proxy/raw/main/vault-proxy-flow.mp4
+<video src="https://github.com/alamparelli/vault-proxy/raw/main/vault-proxy-flow.mp4" autoplay loop muted playsinline></video>
 
 ## Why vault-proxy?
 
