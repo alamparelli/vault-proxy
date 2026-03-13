@@ -74,6 +74,26 @@ func NewServer(store *vault.Store, tokenTTL time.Duration) *Server {
 		return ssrfSafeDialer.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
 	}
 
+	// SEC-002: Relaxed dialer for tls_skip_verify services — allows private IPs
+	// (loopback, RFC1918) but still blocks link-local/metadata endpoints to prevent
+	// cloud metadata SSRF (169.254.x.x, metadata.google.internal).
+	insecureDialContext := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid address: %w", err)
+		}
+		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("DNS resolution failed: %w", err)
+		}
+		for _, ip := range ips {
+			if ip.IP.IsLinkLocalUnicast() || ip.IP.IsLinkLocalMulticast() {
+				return nil, fmt.Errorf("resolved IP %s is link-local — blocked even for insecure services", ip.IP)
+			}
+		}
+		return ssrfSafeDialer.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+	}
+
 	safeTransport := http.DefaultTransport.(*http.Transport).Clone()
 	safeTransport.DialContext = ssrfSafeDialContext
 	// Disable system HTTP proxy — we do our own SSRF validation at DNS level.
@@ -81,7 +101,7 @@ func NewServer(store *vault.Store, tokenTTL time.Duration) *Server {
 	safeTransport.Proxy = nil
 
 	insecureTransport := http.DefaultTransport.(*http.Transport).Clone()
-	insecureTransport.DialContext = ssrfSafeDialContext
+	insecureTransport.DialContext = insecureDialContext
 	insecureTransport.Proxy = nil
 	insecureTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 
