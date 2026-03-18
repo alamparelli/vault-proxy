@@ -45,7 +45,10 @@ func unlock(t *testing.T, url, password string) string {
 func TestHealth(t *testing.T) {
 	_, url := setupTestServer(t)
 
-	resp, _ := http.Get(url + "/health")
+	resp, err := http.Get(url + "/health")
+	if err != nil {
+		t.Fatalf("health request failed: %v", err)
+	}
 	defer resp.Body.Close()
 
 	var result map[string]string
@@ -91,7 +94,10 @@ func TestServicesCRUD(t *testing.T) {
 	req, _ := http.NewRequest("POST", url+"/services", bytes.NewReader([]byte(svc)))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	resp, _ := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("add service request failed: %v", err)
+	}
 	if resp.StatusCode != 201 {
 		data, _ := io.ReadAll(resp.Body)
 		t.Fatalf("add service: %d %s", resp.StatusCode, data)
@@ -101,7 +107,10 @@ func TestServicesCRUD(t *testing.T) {
 	// List services
 	req, _ = http.NewRequest("GET", url+"/services", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
-	resp, _ = http.DefaultClient.Do(req)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("list services failed: %v", err)
+	}
 	defer resp.Body.Close()
 
 	var services []vault.ServiceInfo
@@ -179,7 +188,10 @@ func TestProxyHandler(t *testing.T) {
 	req, _ := http.NewRequest("POST", ts.URL+"/services", bytes.NewReader([]byte(svc)))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	resp, _ := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("add service request failed: %v", err)
+	}
 	if resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("add service failed: %d %s", resp.StatusCode, body)
@@ -191,7 +203,10 @@ func TestProxyHandler(t *testing.T) {
 	req, _ = http.NewRequest("POST", ts.URL+"/proxy/testapi/v1/chat", bytes.NewReader([]byte(proxyBody)))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	resp, _ = http.DefaultClient.Do(req)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("proxy request failed: %v", err)
+	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
@@ -487,13 +502,19 @@ func TestProxyFiltersUpstreamHeaders(t *testing.T) {
 	req, _ := http.NewRequest("POST", ts.URL+"/services", bytes.NewReader([]byte(svc)))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	resp, _ := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("add service failed: %v", err)
+	}
 	resp.Body.Close()
 
 	// Proxy request
 	req, _ = http.NewRequest("GET", ts.URL+"/proxy/headersvc/test", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
-	resp, _ = http.DefaultClient.Do(req)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("proxy request failed: %v", err)
+	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
