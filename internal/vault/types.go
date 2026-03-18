@@ -77,12 +77,13 @@ func (f *File) Info() FileInfo {
 
 // ServiceInfo is a safe view of a service (no secrets).
 type ServiceInfo struct {
-	Name          string `json:"name"`
-	BaseURL       string `json:"base_url"`
-	AuthType      string `json:"auth_type"`
-	TLSSkipVerify bool   `json:"tls_skip_verify,omitempty"`
-	ExpiresAt     int64  `json:"expires_at,omitempty"`    // unix timestamp for oauth2/sa tokens
-	TokenStatus   string `json:"token_status,omitempty"`  // "valid", "expiring", "expired", ""
+	Name          string   `json:"name"`
+	BaseURL       string   `json:"base_url"`
+	AuthType      string   `json:"auth_type"`
+	TLSSkipVerify bool     `json:"tls_skip_verify,omitempty"`
+	ExpiresAt     int64    `json:"expires_at,omitempty"`    // unix timestamp for oauth2/sa tokens
+	TokenStatus   string   `json:"token_status,omitempty"`  // "valid", "expiring", "expired", ""
+	Scopes        []string `json:"scopes,omitempty"`        // oauth2/sa scopes (not secret)
 }
 
 // SafeInfo returns a secret-free view of the service.
@@ -93,12 +94,14 @@ func (s *Service) SafeInfo() ServiceInfo {
 		AuthType:      s.Auth.Type,
 		TLSSkipVerify: s.TLSSkipVerify,
 	}
-	// Include token expiry info for OAuth2 and service account types.
+	// Include token expiry and scopes for OAuth2 and service account types.
 	switch s.Auth.Type {
 	case "oauth2_client":
 		info.ExpiresAt = s.Auth.ExpiresAt
+		info.Scopes = s.Auth.Scopes
 	case "service_account":
 		info.ExpiresAt = s.Auth.SAExpiresAt
+		info.Scopes = s.Auth.SAScopes
 	}
 	if info.ExpiresAt > 0 {
 		info.TokenStatus = TokenStatus(info.ExpiresAt)
