@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alessandrolamparelli/vault-proxy/pkg/client"
+	"github.com/alamparelli/vault-proxy/pkg/client"
 	"golang.org/x/term"
 )
 

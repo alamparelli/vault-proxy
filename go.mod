@@ -1,4 +1,4 @@
-module github.com/alessandrolamparelli/vault-proxy
+module github.com/alamparelli/vault-proxy
 
 go 1.24.5
 

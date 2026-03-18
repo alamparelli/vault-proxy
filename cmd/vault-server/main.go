@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/alessandrolamparelli/vault-proxy/internal/api"
-	"github.com/alessandrolamparelli/vault-proxy/internal/vault"
+	"github.com/alamparelli/vault-proxy/internal/api"
+	"github.com/alamparelli/vault-proxy/internal/vault"
 )
 
 func main() {

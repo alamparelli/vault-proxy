@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alessandrolamparelli/vault-proxy/internal/oauth2"
-	"github.com/alessandrolamparelli/vault-proxy/internal/vault"
+	"github.com/alamparelli/vault-proxy/internal/oauth2"
+	"github.com/alamparelli/vault-proxy/internal/vault"
 )
 
 const (
@@ -249,6 +249,9 @@ func (s *Server) ensureOAuth2Token(ctx context.Context, svc *vault.Service) (str
 		log.Printf("warning: failed to persist refreshed token for %s: %v", svc.Name, err)
 	}
 
+	// Schedule proactive refresh for the new token.
+	s.ScheduleTokenRefresh(svc.Name, updatedAuth.ExpiresAt)
+
 	return result.AccessToken, nil
 }
 
@@ -295,6 +298,9 @@ func (s *Server) ensureServiceAccountToken(ctx context.Context, svc *vault.Servi
 	if err := s.store.UpdateServiceAuth(svc.Name, updatedAuth); err != nil {
 		log.Printf("warning: failed to persist SA token for %s: %v", svc.Name, err)
 	}
+
+	// Schedule proactive refresh for the new token.
+	s.ScheduleTokenRefresh(svc.Name, updatedAuth.SAExpiresAt)
 
 	return result.AccessToken, nil
 }

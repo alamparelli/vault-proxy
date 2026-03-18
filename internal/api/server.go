@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alessandrolamparelli/vault-proxy/internal/vault"
+	"github.com/alamparelli/vault-proxy/internal/vault"
 )
 
 type contextKey string
@@ -45,6 +45,9 @@ type Server struct {
 	// Pending OAuth2 interactive flows
 	pendingFlows   map[string]*pendingOAuth2Flow
 	pendingFlowsMu sync.Mutex
+
+	// Proactive token refresh
+	refreshSched *tokenRefreshScheduler
 }
 
 // NewServer creates a new API server.
@@ -123,12 +126,46 @@ func NewServer(store *vault.Store, tokenTTL time.Duration) *Server {
 		},
 	}
 	s.tokens.StartCleanup(5 * time.Minute)
+	s.refreshSched = newTokenRefreshScheduler(s, s.onRefreshFail)
 	s.routes()
 	return s
 }
 
+// StartTokenRefresh initializes proactive refresh timers for all OAuth2/SA services.
+// Should be called after the vault is unlocked.
+func (s *Server) StartTokenRefresh() {
+	if s.refreshSched != nil {
+		s.refreshSched.ScheduleAll()
+	}
+}
+
+// ScheduleTokenRefresh schedules a proactive refresh for a specific service.
+func (s *Server) ScheduleTokenRefresh(serviceName string, expiresAt int64) {
+	if s.refreshSched != nil && expiresAt > 0 {
+		s.refreshSched.Schedule(serviceName, expiresAt)
+	}
+}
+
+// CancelTokenRefresh cancels the refresh timer for a service.
+func (s *Server) CancelTokenRefresh(serviceName string) {
+	if s.refreshSched != nil {
+		s.refreshSched.Cancel(serviceName)
+	}
+}
+
+// OnRefreshFail is the callback invoked when a background refresh fails.
+// It can be overridden to send alerts (e.g., Telegram notification).
+var OnRefreshFailHook func(service string, err error)
+
+func (s *Server) onRefreshFail(service string, err error) {
+	if OnRefreshFailHook != nil {
+		OnRefreshFailHook(service, err)
+	}
+}
+
 func (s *Server) routes() {
 	s.mux.HandleFunc("/health", s.healthHandler)
+	s.mux.HandleFunc("/health/tokens", s.requireAuth(ScopeProxy, s.tokenHealthHandler))
 	s.mux.HandleFunc("/auth/unlock", s.unlockHandler)
 	s.mux.HandleFunc("/auth/lock", s.requireAuth(ScopeProxy, s.lockHandler))
 
@@ -172,6 +209,33 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 		status = "unlocked"
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": status})
+}
+
+// tokenHealthHandler returns the health status of all OAuth2/SA tokens.
+func (s *Server) tokenHealthHandler(w http.ResponseWriter, r *http.Request) {
+	services, err := s.store.ListServices()
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusServiceUnavailable)
+		return
+	}
+	type tokenHealth struct {
+		Name        string `json:"name"`
+		AuthType    string `json:"auth_type"`
+		ExpiresAt   int64  `json:"expires_at"`
+		TokenStatus string `json:"token_status"`
+	}
+	var results []tokenHealth
+	for _, info := range services {
+		if info.ExpiresAt > 0 {
+			results = append(results, tokenHealth{
+				Name:        info.Name,
+				AuthType:    info.AuthType,
+				ExpiresAt:   info.ExpiresAt,
+				TokenStatus: info.TokenStatus,
+			})
+		}
+	}
+	writeJSON(w, http.StatusOK, results)
 }
 
 func (s *Server) unlockHandler(w http.ResponseWriter, r *http.Request) {
@@ -226,6 +290,10 @@ func (s *Server) unlockHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("vault unlocked, admin token created")
+
+	// Start proactive token refresh for all OAuth2/SA services.
+	s.StartTokenRefresh()
+
 	writeJSON(w, http.StatusOK, token)
 }
 

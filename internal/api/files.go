@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/alessandrolamparelli/vault-proxy/internal/vault"
+	"github.com/alamparelli/vault-proxy/internal/vault"
 )
 
 const maxFileSize = 5 << 20 // 5 MB

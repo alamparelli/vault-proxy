@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alessandrolamparelli/vault-proxy/internal/vault"
+	"github.com/alamparelli/vault-proxy/internal/vault"
 )
 
 func setupTestServer(t *testing.T) (*Server, string) {

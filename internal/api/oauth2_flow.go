@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alessandrolamparelli/vault-proxy/internal/vault"
+	"github.com/alamparelli/vault-proxy/internal/vault"
 )
 
 // pendingOAuth2Flow holds state for an in-progress OAuth2 authorization.

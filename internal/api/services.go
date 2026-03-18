@@ -10,7 +10,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/alessandrolamparelli/vault-proxy/internal/vault"
+	"github.com/alamparelli/vault-proxy/internal/vault"
 )
 
 const maxServiceNameLen = 128
@@ -91,6 +91,7 @@ func (s *Server) deleteServiceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// SEC-002: Clean up refresh lock to prevent unbounded map growth
 	s.removeRefreshLock(name)
+	s.CancelTokenRefresh(name)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 

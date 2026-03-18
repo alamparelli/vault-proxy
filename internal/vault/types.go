@@ -1,5 +1,7 @@
 package vault
 
+import "time"
+
 // Vault holds all secrets in memory.
 type Vault struct {
 	Services map[string]*Service `json:"services"`
@@ -79,14 +81,39 @@ type ServiceInfo struct {
 	BaseURL       string `json:"base_url"`
 	AuthType      string `json:"auth_type"`
 	TLSSkipVerify bool   `json:"tls_skip_verify,omitempty"`
+	ExpiresAt     int64  `json:"expires_at,omitempty"`    // unix timestamp for oauth2/sa tokens
+	TokenStatus   string `json:"token_status,omitempty"`  // "valid", "expiring", "expired", ""
 }
 
 // SafeInfo returns a secret-free view of the service.
 func (s *Service) SafeInfo() ServiceInfo {
-	return ServiceInfo{
+	info := ServiceInfo{
 		Name:          s.Name,
 		BaseURL:       s.BaseURL,
 		AuthType:      s.Auth.Type,
 		TLSSkipVerify: s.TLSSkipVerify,
 	}
+	// Include token expiry info for OAuth2 and service account types.
+	switch s.Auth.Type {
+	case "oauth2_client":
+		info.ExpiresAt = s.Auth.ExpiresAt
+	case "service_account":
+		info.ExpiresAt = s.Auth.SAExpiresAt
+	}
+	if info.ExpiresAt > 0 {
+		info.TokenStatus = TokenStatus(info.ExpiresAt)
+	}
+	return info
+}
+
+// TokenStatus returns the status of a token based on its expiry.
+func TokenStatus(expiresAt int64) string {
+	now := time.Now().Unix()
+	if expiresAt <= now {
+		return "expired"
+	}
+	if expiresAt <= now+1800 { // 30 minutes
+		return "expiring"
+	}
+	return "valid"
 }

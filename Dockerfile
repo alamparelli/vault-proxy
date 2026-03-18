@@ -15,7 +15,10 @@ RUN apk add --no-cache ca-certificates
 COPY --from=builder /vault-server /usr/local/bin/vault-server
 COPY --from=builder /vault-cli /usr/local/bin/vault-cli
 
-RUN adduser -D -u 1000 vault
+RUN adduser -D -u 1000 vault \
+ && mkdir -p /data \
+ && chown vault:vault /data
+
 USER vault
 
 VOLUME /data

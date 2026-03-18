@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/alessandrolamparelli/vault-proxy/internal/crypto"
+	"github.com/alamparelli/vault-proxy/internal/crypto"
 )
 
 const vaultFile = "vault.enc"

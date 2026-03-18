@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	pub "github.com/alessandrolamparelli/vault-proxy/pkg/client"
+	pub "github.com/alamparelli/vault-proxy/pkg/client"
 )
 
 const (
