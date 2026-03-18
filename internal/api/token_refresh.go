@@ -73,10 +73,17 @@ func (s *tokenRefreshScheduler) Schedule(serviceName string, expiresAt int64) {
 		delete(s.timers, serviceName)
 	}
 
-	refreshAt := time.Unix(expiresAt, 0).Add(-refreshBeforeExpiry)
+	expiry := time.Unix(expiresAt, 0)
+	refreshAt := expiry.Add(-refreshBeforeExpiry)
 	delay := time.Until(refreshAt)
 	if delay < minRefreshInterval {
-		delay = minRefreshInterval
+		// Token expires within refreshBeforeExpiry window. Schedule at 80% of remaining lifetime
+		// to avoid a 30s refresh loop when the provider returns the same expiry.
+		remaining := time.Until(expiry)
+		delay = time.Duration(float64(remaining) * 0.8)
+		if delay < minRefreshInterval {
+			delay = minRefreshInterval
+		}
 	}
 
 	log.Printf("[token-refresh] scheduled %s refresh in %s (expires %s)",
