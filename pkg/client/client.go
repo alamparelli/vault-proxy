@@ -310,6 +310,88 @@ func (c *Client) DeleteFile(name string) error {
 	return nil
 }
 
+// SSHExec executes a command on a remote host via the vault SSH proxy.
+func (c *Client) SSHExec(service, command string, timeoutSecs int) (*SSHExecResult, error) {
+	body, _ := json.Marshal(map[string]any{
+		"command": command,
+		"timeout": timeoutSecs,
+	})
+	resp, err := c.do("POST", "/ssh/"+service+"/exec", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, readError(resp)
+	}
+	var result SSHExecResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// SSHUpload uploads data to a remote path via the vault SFTP proxy.
+func (c *Client) SSHUpload(service, remotePath string, data io.Reader, mode string) error {
+	if mode == "" {
+		mode = "0644"
+	}
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	w.WriteField("remote_path", remotePath)
+	w.WriteField("mode", mode)
+	part, err := w.CreateFormFile("file", filepath.Base(remotePath))
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(part, data); err != nil {
+		return err
+	}
+	w.Close()
+
+	req, err := http.NewRequest("POST", c.Addr+"/ssh/"+service+"/upload", &buf)
+	if err != nil {
+		return err
+	}
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return readError(resp)
+	}
+	return nil
+}
+
+// SSHDownload downloads a file from a remote host via the vault SFTP proxy.
+// The caller must close the returned ReadCloser.
+func (c *Client) SSHDownload(service, remotePath string) (io.ReadCloser, error) {
+	body, _ := json.Marshal(map[string]string{"remote_path": remotePath})
+	resp, err := c.do("POST", "/ssh/"+service+"/download", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 400 {
+		defer resp.Body.Close()
+		return nil, readError(resp)
+	}
+	return resp.Body, nil
+}
+
+// SSHSessionURL returns the WebSocket URL for an interactive SSH session.
+func (c *Client) SSHSessionURL(service string) string {
+	addr := c.Addr
+	addr = strings.Replace(addr, "http://", "ws://", 1)
+	addr = strings.Replace(addr, "https://", "wss://", 1)
+	return addr + "/ssh/" + service + "/session"
+}
+
 func (c *Client) do(method, path string, body io.Reader) (*http.Response, error) {
 	url := c.Addr + path
 	req, err := http.NewRequest(method, url, body)

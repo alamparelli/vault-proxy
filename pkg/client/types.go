@@ -24,3 +24,11 @@ type FileInfo struct {
 	MimeType string `json:"mime_type"`
 	Size     int    `json:"size"`
 }
+
+// SSHExecResult is the response from executing a command via SSH proxy.
+type SSHExecResult struct {
+	Stdout     string `json:"stdout"`
+	Stderr     string `json:"stderr"`
+	ExitCode   int    `json:"exit_code"`
+	DurationMs int    `json:"duration_ms"`
+}

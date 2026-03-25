@@ -51,8 +51,13 @@ func (s *Server) addServiceHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 		return
 	}
-	if svc.Name == "" || svc.BaseURL == "" || svc.Auth.Type == "" {
-		http.Error(w, `{"error":"name, base_url, and auth.type are required"}`, http.StatusBadRequest)
+	if svc.Name == "" || svc.Auth.Type == "" {
+		http.Error(w, `{"error":"name and auth.type are required"}`, http.StatusBadRequest)
+		return
+	}
+	// SSH services use ssh_host instead of base_url
+	if svc.Auth.Type != "ssh_key" && svc.BaseURL == "" {
+		http.Error(w, `{"error":"base_url is required for non-SSH services"}`, http.StatusBadRequest)
 		return
 	}
 	if len(svc.Name) > maxServiceNameLen || !validServiceName.MatchString(svc.Name) {
@@ -60,9 +65,12 @@ func (s *Server) addServiceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := validateBaseURL(svc.BaseURL, svc.TLSSkipVerify); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
-		return
+	// Skip base_url validation for SSH services
+	if svc.Auth.Type != "ssh_key" {
+		if err := validateBaseURL(svc.BaseURL, svc.TLSSkipVerify); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+			return
+		}
 	}
 
 	if err := s.validateAuthType(&svc); err != nil {
@@ -136,6 +144,22 @@ func (s *Server) validateAuthType(svc *vault.Service) error {
 				return fmt.Errorf("invalid sa_token_url: %w", err)
 			}
 		}
+	case "ssh_key":
+		if svc.Auth.SSHHost == "" || svc.Auth.SSHUser == "" || svc.Auth.SSHKeyFileRef == "" {
+			return fmt.Errorf("ssh_key requires ssh_host, ssh_user, and ssh_key_file_ref")
+		}
+		if svc.Auth.SSHPort == 0 {
+			svc.Auth.SSHPort = 22
+		}
+		if svc.Auth.SSHPort < 1 || svc.Auth.SSHPort > 65535 {
+			return fmt.Errorf("ssh_port must be between 1 and 65535")
+		}
+		if err := validateSSHHost(svc.Auth.SSHHost); err != nil {
+			return fmt.Errorf("invalid ssh_host: %w", err)
+		}
+		if _, err := s.store.GetFile(svc.Auth.SSHKeyFileRef); err != nil {
+			return fmt.Errorf("ssh_key_file_ref %q: %w", svc.Auth.SSHKeyFileRef, err)
+		}
 	default:
 		return fmt.Errorf("unsupported auth type: %s", svc.Auth.Type)
 	}
@@ -204,6 +228,44 @@ type googleClientCredentials struct {
 	ClientID     string `json:"client_id"`
 	ClientSecret string `json:"client_secret"`
 	TokenURI     string `json:"token_uri"`
+}
+
+// validateSSHHost validates a hostname/IP for SSH connections.
+// Unlike HTTP services, private/RFC1918 IPs are explicitly allowed (homelab use case).
+// Cloud metadata endpoints are still blocked.
+func validateSSHHost(host string) error {
+	if host == "" {
+		return fmt.Errorf("host is required")
+	}
+	// Block cloud metadata endpoints
+	if host == "169.254.169.254" || host == "metadata.google.internal" || host == "metadata" {
+		return fmt.Errorf("must not target cloud metadata services")
+	}
+	// Block localhost hostname
+	if host == "localhost" {
+		return fmt.Errorf("must not target loopback addresses")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		// Block link-local IPs (metadata range)
+		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return fmt.Errorf("must not target link-local addresses")
+		}
+		// SEC: Block loopback — SSH to the vault host itself is a privilege escalation vector.
+		if ip.IsLoopback() {
+			return fmt.Errorf("must not target loopback addresses")
+		}
+		// Block unspecified addresses (0.0.0.0, ::)
+		if ip.IsUnspecified() {
+			return fmt.Errorf("must not target unspecified addresses")
+		}
+	}
+	// If it's not an IP, validate it looks like a hostname
+	if net.ParseIP(host) == nil {
+		if strings.ContainsAny(host, " /\\:@") {
+			return fmt.Errorf("invalid hostname characters")
+		}
+	}
+	return nil
 }
 
 // validateBaseURL ensures the URL is HTTPS and does not resolve to private/internal IPs.

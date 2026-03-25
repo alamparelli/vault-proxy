@@ -18,7 +18,7 @@ type Service struct {
 
 // Auth holds credentials for a service.
 type Auth struct {
-	Type string `json:"type"` // bearer, header, basic, oauth2_client, service_account
+	Type string `json:"type"` // bearer, header, basic, oauth2_client, service_account, ssh_key
 
 	// bearer
 	Token string `json:"token,omitempty"`
@@ -50,6 +50,14 @@ type Auth struct {
 	SATokenURL  string   `json:"sa_token_url,omitempty"`    // defaults to Google's
 	SAToken     string   `json:"sa_access_token,omitempty"`
 	SAExpiresAt int64    `json:"sa_expires_at,omitempty"`
+
+	// ssh_key
+	SSHHost          string `json:"ssh_host,omitempty"`           // hostname or IP
+	SSHPort          int    `json:"ssh_port,omitempty"`           // default 22
+	SSHUser          string `json:"ssh_user,omitempty"`
+	SSHKeyFileRef    string `json:"ssh_key_file_ref,omitempty"`   // references Files entry (PEM private key)
+	SSHKeyPassphrase string `json:"ssh_key_passphrase,omitempty"` // optional, encrypted at rest
+	SSHHostKey       string `json:"ssh_host_key,omitempty"`       // auto-saved on first connect (TOFU)
 }
 
 // File holds an encrypted credential file.
@@ -84,6 +92,10 @@ type ServiceInfo struct {
 	ExpiresAt     int64    `json:"expires_at,omitempty"`    // unix timestamp for oauth2/sa tokens
 	TokenStatus   string   `json:"token_status,omitempty"`  // "valid", "expiring", "expired", ""
 	Scopes        []string `json:"scopes,omitempty"`        // oauth2/sa scopes (not secret)
+	SSHHost       string   `json:"ssh_host,omitempty"`      // hostname or IP (ssh_key only)
+	SSHPort       int      `json:"ssh_port,omitempty"`      // port (ssh_key only)
+	SSHUser       string   `json:"ssh_user,omitempty"`      // username (ssh_key only)
+	SSHConnected  bool     `json:"ssh_connected,omitempty"` // true if TOFU host key is set
 }
 
 // SafeInfo returns a secret-free view of the service.
@@ -102,6 +114,11 @@ func (s *Service) SafeInfo() ServiceInfo {
 	case "service_account":
 		info.ExpiresAt = s.Auth.SAExpiresAt
 		info.Scopes = s.Auth.SAScopes
+	case "ssh_key":
+		info.SSHHost = s.Auth.SSHHost
+		info.SSHPort = s.Auth.SSHPort
+		info.SSHUser = s.Auth.SSHUser
+		info.SSHConnected = s.Auth.SSHHostKey != ""
 	}
 	if info.ExpiresAt > 0 {
 		info.TokenStatus = TokenStatus(info.ExpiresAt)

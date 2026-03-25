@@ -169,13 +169,13 @@ func (s *Server) injectAuth(ctx context.Context, req *http.Request, svc *vault.S
 		)
 		req.Header.Set("Authorization", "Basic "+encoded)
 	case "oauth2_client":
-		token, err := s.ensureOAuth2Token(ctx, svc)
+		token, err := s.ensureOAuth2Token(ctx, svc, false)
 		if err != nil {
 			return fmt.Errorf("oauth2 refresh: %w", err)
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 	case "service_account":
-		token, err := s.ensureServiceAccountToken(ctx, svc)
+		token, err := s.ensureServiceAccountToken(ctx, svc, false)
 		if err != nil {
 			return fmt.Errorf("service account exchange: %w", err)
 		}
@@ -207,9 +207,10 @@ func (s *Server) removeRefreshLock(serviceName string) {
 }
 
 // ensureOAuth2Token returns a valid access token, refreshing if needed.
-func (s *Server) ensureOAuth2Token(ctx context.Context, svc *vault.Service) (string, error) {
-	// Fast path: token still valid
-	if svc.Auth.AccessToken != "" && svc.Auth.ExpiresAt > time.Now().Unix()+tokenExpiryBuffer {
+// If force is true, the token is refreshed even if still valid (used by proactive refresh).
+func (s *Server) ensureOAuth2Token(ctx context.Context, svc *vault.Service, force bool) (string, error) {
+	// Fast path: token still valid (skipped when force=true)
+	if !force && svc.Auth.AccessToken != "" && svc.Auth.ExpiresAt > time.Now().Unix()+tokenExpiryBuffer {
 		return svc.Auth.AccessToken, nil
 	}
 
@@ -223,7 +224,7 @@ func (s *Server) ensureOAuth2Token(ctx context.Context, svc *vault.Service) (str
 	if err != nil {
 		return "", err
 	}
-	if fresh.Auth.AccessToken != "" && fresh.Auth.ExpiresAt > time.Now().Unix()+tokenExpiryBuffer {
+	if !force && fresh.Auth.AccessToken != "" && fresh.Auth.ExpiresAt > time.Now().Unix()+tokenExpiryBuffer {
 		return fresh.Auth.AccessToken, nil
 	}
 
@@ -256,9 +257,10 @@ func (s *Server) ensureOAuth2Token(ctx context.Context, svc *vault.Service) (str
 }
 
 // ensureServiceAccountToken returns a valid SA access token, exchanging JWT if needed.
-func (s *Server) ensureServiceAccountToken(ctx context.Context, svc *vault.Service) (string, error) {
-	// Fast path: token still valid
-	if svc.Auth.SAToken != "" && svc.Auth.SAExpiresAt > time.Now().Unix()+tokenExpiryBuffer {
+// If force is true, the token is refreshed even if still valid (used by proactive refresh).
+func (s *Server) ensureServiceAccountToken(ctx context.Context, svc *vault.Service, force bool) (string, error) {
+	// Fast path: token still valid (skipped when force=true)
+	if !force && svc.Auth.SAToken != "" && svc.Auth.SAExpiresAt > time.Now().Unix()+tokenExpiryBuffer {
 		return svc.Auth.SAToken, nil
 	}
 
@@ -271,7 +273,7 @@ func (s *Server) ensureServiceAccountToken(ctx context.Context, svc *vault.Servi
 	if err != nil {
 		return "", err
 	}
-	if fresh.Auth.SAToken != "" && fresh.Auth.SAExpiresAt > time.Now().Unix()+tokenExpiryBuffer {
+	if !force && fresh.Auth.SAToken != "" && fresh.Auth.SAExpiresAt > time.Now().Unix()+tokenExpiryBuffer {
 		return fresh.Auth.SAToken, nil
 	}
 

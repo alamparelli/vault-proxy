@@ -8,8 +8,9 @@ import (
 )
 
 const (
-	// refreshBeforeExpiry is how long before token expiry to trigger a proactive refresh.
-	refreshBeforeExpiry = 30 * time.Minute
+	// refreshAtFraction is the fraction of remaining lifetime to use as the delay.
+	// 0.90 means: fire when 10% of the token's remaining lifetime is left.
+	refreshAtFraction = 0.90
 	// minRefreshInterval prevents scheduling a timer less than this duration from now.
 	minRefreshInterval = 30 * time.Second
 )
@@ -62,7 +63,7 @@ func (s *tokenRefreshScheduler) ScheduleAll() {
 	}
 }
 
-// Schedule sets a timer to refresh the token 30 min before expiry.
+// Schedule sets a timer to proactively refresh the token when 10% of its remaining lifetime is left.
 func (s *tokenRefreshScheduler) Schedule(serviceName string, expiresAt int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -73,17 +74,10 @@ func (s *tokenRefreshScheduler) Schedule(serviceName string, expiresAt int64) {
 		delete(s.timers, serviceName)
 	}
 
-	expiry := time.Unix(expiresAt, 0)
-	refreshAt := expiry.Add(-refreshBeforeExpiry)
-	delay := time.Until(refreshAt)
+	remaining := time.Until(time.Unix(expiresAt, 0))
+	delay := time.Duration(float64(remaining) * refreshAtFraction)
 	if delay < minRefreshInterval {
-		// Token expires within refreshBeforeExpiry window. Schedule at 80% of remaining lifetime
-		// to avoid a 30s refresh loop when the provider returns the same expiry.
-		remaining := time.Until(expiry)
-		delay = time.Duration(float64(remaining) * 0.8)
-		if delay < minRefreshInterval {
-			delay = minRefreshInterval
-		}
+		delay = minRefreshInterval
 	}
 
 	log.Printf("[token-refresh] scheduled %s refresh in %s (expires %s)",
@@ -130,7 +124,7 @@ func (s *tokenRefreshScheduler) doRefresh(serviceName string) {
 
 	switch svc.Auth.Type {
 	case "oauth2_client":
-		_, err = s.server.ensureOAuth2Token(ctx, svc)
+		_, err = s.server.ensureOAuth2Token(ctx, svc, true)
 		if err == nil {
 			// Re-read to get updated expiry.
 			if fresh, err2 := s.server.store.GetService(serviceName); err2 == nil {
@@ -138,7 +132,7 @@ func (s *tokenRefreshScheduler) doRefresh(serviceName string) {
 			}
 		}
 	case "service_account":
-		_, err = s.server.ensureServiceAccountToken(ctx, svc)
+		_, err = s.server.ensureServiceAccountToken(ctx, svc, true)
 		if err == nil {
 			if fresh, err2 := s.server.store.GetService(serviceName); err2 == nil {
 				newExpiresAt = fresh.Auth.SAExpiresAt

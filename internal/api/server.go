@@ -187,6 +187,9 @@ func (s *Server) routes() {
 
 	// Proxy (proxy scope)
 	s.mux.HandleFunc("/proxy/", s.requireAuth(ScopeProxy, s.proxyHandler))
+
+	// SSH proxy (proxy scope)
+	s.mux.HandleFunc("/ssh/", s.requireAuth(ScopeProxy, s.sshRouter))
 }
 
 // ServeHTTP implements http.Handler.
