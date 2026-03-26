@@ -18,7 +18,7 @@ func setupTestServer(t *testing.T) (*Server, string) {
 	t.Helper()
 	dir := t.TempDir()
 	store := vault.NewStore(dir)
-	server := NewServer(store, time.Hour)
+	server := NewServer(store, time.Hour, "")
 	ts := httptest.NewServer(server)
 	t.Cleanup(ts.Close)
 	return server, ts.URL
@@ -177,7 +177,7 @@ func TestProxyHandler(t *testing.T) {
 
 	dir := t.TempDir()
 	store := vault.NewStore(dir)
-	server := NewServer(store, time.Hour)
+	server := NewServer(store, time.Hour, "")
 	ts := httptest.NewServer(server)
 	defer ts.Close()
 
@@ -234,7 +234,7 @@ func TestProxyStripsCallerAuth(t *testing.T) {
 
 	dir := t.TempDir()
 	store := vault.NewStore(dir)
-	server := NewServer(store, time.Hour)
+	server := NewServer(store, time.Hour, "")
 	ts := httptest.NewServer(server)
 	defer ts.Close()
 
@@ -492,7 +492,7 @@ func TestProxyFiltersUpstreamHeaders(t *testing.T) {
 
 	dir := t.TempDir()
 	store := vault.NewStore(dir)
-	server := NewServer(store, time.Hour)
+	server := NewServer(store, time.Hour, "")
 	ts := httptest.NewServer(server)
 	defer ts.Close()
 
@@ -563,5 +563,59 @@ func TestPasswordMinLength(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 for valid password, got %d", resp.StatusCode)
+	}
+}
+
+func TestHTTPProxyConfiguration(t *testing.T) {
+	// Verify that proxy requests are routed through the configured HTTP proxy.
+	// We set up a fake HTTP proxy that records CONNECT requests.
+	var proxyHit bool
+	fakeProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyHit = true
+		// Return 502 — we just need to verify the proxy was contacted.
+		http.Error(w, "proxy reached", http.StatusBadGateway)
+	}))
+	defer fakeProxy.Close()
+
+	dir := t.TempDir()
+	store := vault.NewStore(dir)
+	server := NewServer(store, time.Hour, fakeProxy.URL)
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	token := unlock(t, ts.URL, "master-password-12")
+
+	// Add a service pointing to an external HTTPS URL (will fail but that's fine).
+	svc := `{"name":"proxied","base_url":"http://httpbin.org","auth":{"type":"bearer","token":"t"},"tls_skip_verify":true}`
+	req, _ := http.NewRequest("POST", ts.URL+"/services", bytes.NewReader([]byte(svc)))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	// Make a proxy request — it should go through our fake proxy.
+	req, _ = http.NewRequest("GET", ts.URL+"/proxy/proxied/get", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("proxy request failed: %v", err)
+	}
+	resp.Body.Close()
+
+	if !proxyHit {
+		t.Error("HTTP proxy was not contacted — requests are not being routed through the proxy")
+	}
+}
+
+func TestNoHTTPProxyWhenEmpty(t *testing.T) {
+	// When httpProxyURL is empty, transport.Proxy should be nil (no proxy).
+	dir := t.TempDir()
+	store := vault.NewStore(dir)
+	server := NewServer(store, time.Hour, "")
+
+	// The proxyClient transport should have Proxy == nil.
+	tr := server.proxyClient.Transport.(*http.Transport)
+	if tr.Proxy != nil {
+		t.Error("expected Proxy=nil when httpProxyURL is empty")
 	}
 }

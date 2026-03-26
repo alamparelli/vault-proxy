@@ -23,6 +23,7 @@ func main() {
 	tokenTTL := flag.Duration("token-ttl", 24*time.Hour, "session token TTL")
 	tlsCert := flag.String("tls-cert", "", "path to TLS certificate file")
 	tlsKey := flag.String("tls-key", "", "path to TLS private key file")
+	httpProxy := flag.String("http-proxy", "", "HTTP proxy URL for outbound requests (e.g. http://127.0.0.1:4751)")
 	flag.Parse()
 
 	if err := os.MkdirAll(*dataDir, 0700); err != nil {
@@ -39,7 +40,7 @@ func main() {
 	signal.Ignore(syscall.SIGPIPE)
 
 	store := vault.NewStore(*dataDir)
-	server := api.NewServer(store, *tokenTTL)
+	server := api.NewServer(store, *tokenTTL, *httpProxy)
 
 	srv := &http.Server{
 		Addr:         *listen,

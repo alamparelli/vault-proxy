@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -51,18 +52,38 @@ type Server struct {
 }
 
 // NewServer creates a new API server.
-func NewServer(store *vault.Store, tokenTTL time.Duration) *Server {
+// httpProxyURL, if non-empty, routes all outbound proxy requests through the given
+// HTTP proxy (e.g. "http://127.0.0.1:4751"). The proxy's IP is exempted from SSRF checks.
+func NewServer(store *vault.Store, tokenTTL time.Duration, httpProxyURL string) *Server {
 	noRedirect := func(req *http.Request, via []*http.Request) error {
 		return errors.New("redirects disabled for security")
 	}
 
+	// Resolve the trusted proxy IP (if configured) to exempt it from SSRF blocking.
+	var trustedProxyHost string
+	var proxyFunc func(*http.Request) (*url.URL, error)
+	if httpProxyURL != "" {
+		if u, err := url.Parse(httpProxyURL); err == nil {
+			trustedProxyHost = u.Hostname()
+			fixed := http.ProxyURL(u)
+			proxyFunc = fixed
+			log.Printf("outbound HTTP proxy configured: %s (trusted host: %s)", httpProxyURL, trustedProxyHost)
+		}
+	}
+
 	// SEC-001: Custom dialer that validates resolved IPs at connect time
 	// to prevent DNS rebinding attacks (TOCTOU between service creation and proxy use).
+	// When an HTTP proxy is configured, connections to the proxy itself are allowed
+	// (the proxy is trusted — it's the daemon's firewall).
 	ssrfSafeDialer := &net.Dialer{Timeout: 10 * time.Second}
 	ssrfSafeDialContext := func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
 			return nil, fmt.Errorf("invalid address: %w", err)
+		}
+		// Allow connections to the trusted proxy without IP validation.
+		if host == trustedProxyHost {
+			return ssrfSafeDialer.DialContext(ctx, network, addr)
 		}
 		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 		if err != nil {
@@ -85,6 +106,9 @@ func NewServer(store *vault.Store, tokenTTL time.Duration) *Server {
 		if err != nil {
 			return nil, fmt.Errorf("invalid address: %w", err)
 		}
+		if host == trustedProxyHost {
+			return ssrfSafeDialer.DialContext(ctx, network, addr)
+		}
 		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 		if err != nil {
 			return nil, fmt.Errorf("DNS resolution failed: %w", err)
@@ -99,13 +123,11 @@ func NewServer(store *vault.Store, tokenTTL time.Duration) *Server {
 
 	safeTransport := http.DefaultTransport.(*http.Transport).Clone()
 	safeTransport.DialContext = ssrfSafeDialContext
-	// Disable system HTTP proxy — we do our own SSRF validation at DNS level.
-	// Using an HTTP proxy (often on 127.0.0.1) conflicts with private-IP blocking.
-	safeTransport.Proxy = nil
+	safeTransport.Proxy = proxyFunc // nil if no proxy configured, routes through proxy otherwise
 
 	insecureTransport := http.DefaultTransport.(*http.Transport).Clone()
 	insecureTransport.DialContext = insecureDialContext
-	insecureTransport.Proxy = nil
+	insecureTransport.Proxy = proxyFunc
 	insecureTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 
 	s := &Server{
