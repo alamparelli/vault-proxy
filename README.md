@@ -122,8 +122,10 @@ curl -X POST http://127.0.0.1:8390/proxy/openrouter/v1/chat/completions \
 | `bearer` | Static API keys (OpenAI, Anthropic, etc.) | No |
 | `header` | Custom header auth (`X-API-Key`, etc.) | No |
 | `basic` | Username/password (Jira, Confluence, etc.) | No |
+| `url` | Token in URL path (`{token}` placeholder in base_url) | No |
 | `oauth2_client` | OAuth2 with refresh token (Google APIs, etc.) | Yes |
 | `service_account` | Google service account JWT exchange | Yes |
+| `ssh_key` | SSH key authentication (exec, upload, download) | No |
 
 See [docs/AUTH_SETUP.md](docs/AUTH_SETUP.md) for detailed setup instructions for each auth type, including OAuth2 browser flow and file-based setup.
 
@@ -142,6 +144,13 @@ See [docs/AUTH_SETUP.md](docs/AUTH_SETUP.md) for detailed setup instructions for
   "name": "anthropic",
   "base_url": "https://api.anthropic.com",
   "auth": {"type": "header", "header_name": "x-api-key", "header_value": "sk-ant-xxxxx"}
+}'
+
+# URL path token (key in URL, e.g. Klipy, Giphy)
+./vault-cli service add '{
+  "name": "klipy",
+  "base_url": "https://api.klipy.com/api/v1/{token}",
+  "auth": {"type": "url", "token": "your-api-key"}
 }'
 
 # OAuth2 with automatic token refresh
@@ -169,6 +178,20 @@ See [docs/AUTH_SETUP.md](docs/AUTH_SETUP.md) for detailed setup instructions for
     "sa_scopes": ["https://www.googleapis.com/auth/bigquery.readonly"]
   }
 }'
+
+# SSH key authentication
+./vault-cli file upload my-ssh-key ~/.ssh/id_ed25519
+./vault-cli service add '{
+  "name": "my-server",
+  "auth": {
+    "type": "ssh_key",
+    "ssh_host": "192.168.1.100",
+    "ssh_port": 22,
+    "ssh_user": "deploy",
+    "ssh_key_file_ref": "my-ssh-key"
+  }
+}'
+# Use: POST /ssh/my-server/exec, /ssh/my-server/upload, /ssh/my-server/download
 ```
 
 ## Token Scopes

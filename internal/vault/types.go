@@ -18,7 +18,7 @@ type Service struct {
 
 // Auth holds credentials for a service.
 type Auth struct {
-	Type string `json:"type"` // bearer, header, basic, oauth2_client, service_account, ssh_key
+	Type string `json:"type"` // bearer, header, basic, oauth2_client, service_account, ssh_key, url
 
 	// bearer
 	Token string `json:"token,omitempty"`

@@ -70,8 +70,12 @@ func (s *Server) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build target URL
-	targetURL := strings.TrimRight(svc.BaseURL, "/")
+	// Build target URL (substitute {token} placeholder for url auth type)
+	baseURL := svc.BaseURL
+	if svc.Auth.Type == "url" && strings.Contains(baseURL, "{token}") {
+		baseURL = strings.ReplaceAll(baseURL, "{token}", svc.Auth.Token)
+	}
+	targetURL := strings.TrimRight(baseURL, "/")
 	if apiPath != "" {
 		targetURL += "/" + apiPath
 	}
@@ -180,6 +184,9 @@ func (s *Server) injectAuth(ctx context.Context, req *http.Request, svc *vault.S
 			return fmt.Errorf("service account exchange: %w", err)
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
+	case "url":
+		// Token already injected into URL via {token} substitution in proxyHandler.
+		// No header injection needed.
 	default:
 		return fmt.Errorf("unsupported auth type: %s", auth.Type)
 	}

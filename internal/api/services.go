@@ -144,6 +144,13 @@ func (s *Server) validateAuthType(svc *vault.Service) error {
 				return fmt.Errorf("invalid sa_token_url: %w", err)
 			}
 		}
+	case "url":
+		if svc.Auth.Token == "" {
+			return fmt.Errorf("url auth requires token")
+		}
+		if !strings.Contains(svc.BaseURL, "{token}") {
+			return fmt.Errorf("url auth requires {token} placeholder in base_url")
+		}
 	case "ssh_key":
 		if svc.Auth.SSHHost == "" || svc.Auth.SSHUser == "" || svc.Auth.SSHKeyFileRef == "" {
 			return fmt.Errorf("ssh_key requires ssh_host, ssh_user, and ssh_key_file_ref")
