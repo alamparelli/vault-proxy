@@ -14,7 +14,7 @@ type Service struct {
 	BaseURL        string `json:"base_url"`
 	Auth           Auth   `json:"auth"`
 	TLSSkipVerify  bool   `json:"tls_skip_verify,omitempty"`
-	SessionCookies bool   `json:"session_cookies,omitempty"` // persist upstream cookies between proxy calls (e.g. AWSALB sticky sessions)
+	SessionCookies bool   `json:"session_cookies,omitempty"` // persist upstream cookies between proxy calls (sticky sessions, CSRF, etc.)
 }
 
 // Auth holds credentials for a service.

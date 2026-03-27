@@ -12,7 +12,7 @@ const maxCookiesPerJar = 50
 
 // sessionCookieJar is a thread-safe in-memory cookie store for a single service.
 // It captures Set-Cookie headers from upstream responses and re-injects them
-// on subsequent outbound requests. Used for sticky sessions (e.g. AWSALB).
+// on subsequent outbound requests. Used for sticky sessions, CSRF tokens, etc.
 //
 // Note: this is a simple name-keyed store that ignores cookie Domain and Path
 // attributes. This is acceptable for the intended use case (single-host sticky

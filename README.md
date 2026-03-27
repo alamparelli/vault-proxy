@@ -208,11 +208,11 @@ See [docs/AUTH_SETUP.md](docs/AUTH_SETUP.md) for detailed setup instructions for
 
 ### Session Cookies (Sticky Sessions)
 
-Some APIs require session affinity via cookies (e.g. AWS ALB `AWSALB` cookies). Enable `session_cookies` to have the proxy automatically capture and re-send cookies between calls:
+Some APIs require cookies to be persisted between calls (load balancer sticky sessions, server-side sessions, CSRF tokens). Enable `session_cookies` to have the proxy automatically capture and re-send cookies:
 
 ```bash
 ./vault-cli service add '{
-  "name": "arc-agi",
+  "name": "my-api",
   "base_url": "https://api.example.com",
   "auth": {"type": "bearer", "token": "sk-xxx"},
   "session_cookies": true
@@ -224,6 +224,7 @@ How it works:
 - Stored cookies are **re-injected** into all subsequent proxy requests to that service
 - Cookie jar is **in-memory only** -- cleared on vault lock/restart
 - One shared jar per service (all callers share the same session affinity)
+- Works with any session mechanism: AWS ALB, JSESSIONID, ASP.NET, PHPSESSID, custom cookies
 
 ## Token Scopes
 

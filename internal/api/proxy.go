@@ -119,7 +119,7 @@ func (s *Server) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Inject session cookies if enabled for this service (e.g. AWSALB sticky sessions)
+	// Inject session cookies if enabled for this service
 	if svc.SessionCookies {
 		s.getJar(serviceName).injectCookies(outReq)
 	}
