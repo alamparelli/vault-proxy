@@ -10,10 +10,11 @@ type Vault struct {
 
 // Service represents a configured API service.
 type Service struct {
-	Name          string `json:"name"`
-	BaseURL       string `json:"base_url"`
-	Auth          Auth   `json:"auth"`
-	TLSSkipVerify bool   `json:"tls_skip_verify,omitempty"`
+	Name           string `json:"name"`
+	BaseURL        string `json:"base_url"`
+	Auth           Auth   `json:"auth"`
+	TLSSkipVerify  bool   `json:"tls_skip_verify,omitempty"`
+	SessionCookies bool   `json:"session_cookies,omitempty"` // persist upstream cookies between proxy calls (e.g. AWSALB sticky sessions)
 }
 
 // Auth holds credentials for a service.
@@ -96,16 +97,18 @@ type ServiceInfo struct {
 	SSHHost       string   `json:"ssh_host,omitempty"`      // hostname or IP (ssh_key only)
 	SSHPort       int      `json:"ssh_port,omitempty"`      // port (ssh_key only)
 	SSHUser       string   `json:"ssh_user,omitempty"`      // username (ssh_key only)
-	SSHConnected  bool     `json:"ssh_connected,omitempty"` // true if TOFU host key is set
+	SSHConnected   bool     `json:"ssh_connected,omitempty"`   // true if TOFU host key is set
+	SessionCookies bool     `json:"session_cookies,omitempty"` // true if session cookie jar is enabled
 }
 
 // SafeInfo returns a secret-free view of the service.
 func (s *Service) SafeInfo() ServiceInfo {
 	info := ServiceInfo{
-		Name:          s.Name,
-		BaseURL:       s.BaseURL,
-		AuthType:      s.Auth.Type,
-		TLSSkipVerify: s.TLSSkipVerify,
+		Name:           s.Name,
+		BaseURL:        s.BaseURL,
+		AuthType:       s.Auth.Type,
+		TLSSkipVerify:  s.TLSSkipVerify,
+		SessionCookies: s.SessionCookies,
 	}
 	// Include token expiry and scopes for OAuth2 and service account types.
 	switch s.Auth.Type {

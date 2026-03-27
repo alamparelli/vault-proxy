@@ -192,7 +192,38 @@ See [docs/AUTH_SETUP.md](docs/AUTH_SETUP.md) for detailed setup instructions for
   }
 }'
 # Use: POST /ssh/my-server/exec, /ssh/my-server/upload, /ssh/my-server/download
+
+# SSH with command restrictions (only these commands are allowed)
+./vault-cli service add '{
+  "name": "prod-server",
+  "auth": {
+    "type": "ssh_key",
+    "ssh_host": "10.0.1.50",
+    "ssh_user": "deploy",
+    "ssh_key_file_ref": "prod-key",
+    "ssh_allowed_commands": ["docker ps", "docker logs", "systemctl status"]
+  }
+}'
 ```
+
+### Session Cookies (Sticky Sessions)
+
+Some APIs require session affinity via cookies (e.g. AWS ALB `AWSALB` cookies). Enable `session_cookies` to have the proxy automatically capture and re-send cookies between calls:
+
+```bash
+./vault-cli service add '{
+  "name": "arc-agi",
+  "base_url": "https://api.example.com",
+  "auth": {"type": "bearer", "token": "sk-xxx"},
+  "session_cookies": true
+}'
+```
+
+How it works:
+- Upstream `Set-Cookie` headers are **captured server-side** (never forwarded to the client)
+- Stored cookies are **re-injected** into all subsequent proxy requests to that service
+- Cookie jar is **in-memory only** -- cleared on vault lock/restart
+- One shared jar per service (all callers share the same session affinity)
 
 ## Token Scopes
 
@@ -266,6 +297,10 @@ Store credential files (service account JSONs, client secrets) encrypted in the 
 - SSRF protection: private/loopback/link-local IPs blocked, HTTPS enforced
 - Brute-force protection on unlock with exponential backoff
 - Every proxy call logged (service, method, path, status, duration -- never credentials)
+- URL auth tokens masked in all log output and error messages
+- SSH exec supports per-service command allowlists (`ssh_allowed_commands`)
+- SFTP upload/download blocks writes to sensitive system directories (`/etc/`, `/root/.ssh/`, etc.)
+- Session cookies stored server-side only (never forwarded to clients)
 - `vault.enc.bak` backup created on every save
 - Master password lost = no recovery
 

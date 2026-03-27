@@ -119,6 +119,11 @@ func (s *Server) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Inject session cookies if enabled for this service (e.g. AWSALB sticky sessions)
+	if svc.SessionCookies {
+		s.getJar(serviceName).injectCookies(outReq)
+	}
+
 	// Pick pre-built client (reused across requests, no per-request allocation)
 	client := s.proxyClient
 	if svc.TLSSkipVerify {
@@ -145,6 +150,11 @@ func (s *Server) proxyHandler(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 
 	log.Printf("proxy %s %s /%s -> %d (%s) token=%s", r.Method, serviceName, apiPath, resp.StatusCode, duration, tokenID)
+
+	// Capture upstream session cookies (stored server-side, never forwarded to client)
+	if svc.SessionCookies {
+		s.getJar(serviceName).captureCookies(resp)
+	}
 
 	// Copy response headers, filtering out security-sensitive ones
 	for k, vv := range resp.Header {

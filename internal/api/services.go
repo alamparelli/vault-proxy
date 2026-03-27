@@ -97,8 +97,9 @@ func (s *Server) deleteServiceHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusNotFound)
 		return
 	}
-	// SEC-002: Clean up refresh lock to prevent unbounded map growth
+	// Clean up per-service state to prevent unbounded map growth
 	s.removeRefreshLock(name)
+	s.removeJar(name)
 	s.CancelTokenRefresh(name)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }

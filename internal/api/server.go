@@ -49,6 +49,10 @@ type Server struct {
 
 	// Proactive token refresh
 	refreshSched *tokenRefreshScheduler
+
+	// Per-service session cookie jars (in-memory only, cleared on lock)
+	cookieJars   map[string]*sessionCookieJar
+	cookieJarsMu sync.Mutex
 }
 
 // NewServer creates a new API server.
@@ -136,6 +140,7 @@ func NewServer(store *vault.Store, tokenTTL time.Duration, httpProxyURL string) 
 		mux:          http.NewServeMux(),
 		refreshLocks: make(map[string]*sync.Mutex),
 		pendingFlows: make(map[string]*pendingOAuth2Flow),
+		cookieJars:   make(map[string]*sessionCookieJar),
 		proxyClient: &http.Client{
 			Timeout:       30 * time.Second,
 			Transport:     safeTransport,
@@ -329,8 +334,9 @@ func (s *Server) lockHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.tokens.RevokeAll()
+	s.clearCookieJars()
 	s.store.Lock()
-	log.Printf("vault locked, all tokens revoked")
+	log.Printf("vault locked, all tokens revoked, session cookies cleared")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "locked"})
 }
 

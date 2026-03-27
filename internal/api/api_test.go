@@ -607,6 +607,193 @@ func TestHTTPProxyConfiguration(t *testing.T) {
 	}
 }
 
+func TestSessionCookies(t *testing.T) {
+	callCount := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if callCount == 1 {
+			// First call: upstream sets AWSALB sticky session cookies
+			http.SetCookie(w, &http.Cookie{Name: "AWSALB", Value: "abc123", Path: "/"})
+			http.SetCookie(w, &http.Cookie{Name: "AWSALBCORS", Value: "xyz789", Path: "/"})
+		} else {
+			// Subsequent calls: verify cookies were re-sent by the proxy
+			awsalb, err := r.Cookie("AWSALB")
+			if err != nil || awsalb.Value != "abc123" {
+				t.Errorf("call %d: expected AWSALB=abc123, got %v (err=%v)", callCount, awsalb, err)
+			}
+			cors, err := r.Cookie("AWSALBCORS")
+			if err != nil || cors.Value != "xyz789" {
+				t.Errorf("call %d: expected AWSALBCORS=xyz789, got %v (err=%v)", callCount, cors, err)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"call":%d}`, callCount)
+	}))
+	defer upstream.Close()
+
+	dir := t.TempDir()
+	store := vault.NewStore(dir)
+	server := NewServer(store, time.Hour, "")
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	token := unlock(t, ts.URL, "master-password-12")
+
+	// Add service with session_cookies enabled
+	svc := fmt.Sprintf(`{"name":"sticky","base_url":"%s","auth":{"type":"bearer","token":"t"},"tls_skip_verify":true,"session_cookies":true}`, upstream.URL)
+	req, _ := http.NewRequest("POST", ts.URL+"/services", bytes.NewReader([]byte(svc)))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("add service failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("add service: expected 201, got %d", resp.StatusCode)
+	}
+
+	// First proxy call — upstream sets cookies
+	req, _ = http.NewRequest("GET", ts.URL+"/proxy/sticky/api/init", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("first proxy call failed: %v", err)
+	}
+	resp.Body.Close()
+
+	// Set-Cookie must NOT leak to the client (blocked by upstream header filter)
+	if v := resp.Header.Get("Set-Cookie"); v != "" {
+		t.Errorf("Set-Cookie should not be forwarded to client, got %q", v)
+	}
+
+	// Second proxy call — proxy should inject the stored cookies
+	req, _ = http.NewRequest("GET", ts.URL+"/proxy/sticky/api/action", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("second proxy call failed: %v", err)
+	}
+	resp.Body.Close()
+
+	// Third call — cookies should still be there
+	req, _ = http.NewRequest("GET", ts.URL+"/proxy/sticky/api/action2", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("third proxy call failed: %v", err)
+	}
+	resp.Body.Close()
+
+	if callCount != 3 {
+		t.Fatalf("expected 3 upstream calls, got %d", callCount)
+	}
+}
+
+func TestSessionCookiesDisabledByDefault(t *testing.T) {
+	callCount := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if callCount == 1 {
+			http.SetCookie(w, &http.Cookie{Name: "AWSALB", Value: "abc123", Path: "/"})
+		} else {
+			// Without session_cookies, no cookies should be sent back
+			if _, err := r.Cookie("AWSALB"); err == nil {
+				t.Errorf("call %d: AWSALB cookie should NOT be present when session_cookies is disabled", callCount)
+			}
+		}
+		fmt.Fprintf(w, `{"ok":true}`)
+	}))
+	defer upstream.Close()
+
+	dir := t.TempDir()
+	store := vault.NewStore(dir)
+	server := NewServer(store, time.Hour, "")
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	token := unlock(t, ts.URL, "master-password-12")
+
+	// Add service WITHOUT session_cookies
+	svc := fmt.Sprintf(`{"name":"nosticky","base_url":"%s","auth":{"type":"bearer","token":"t"},"tls_skip_verify":true}`, upstream.URL)
+	req, _ := http.NewRequest("POST", ts.URL+"/services", bytes.NewReader([]byte(svc)))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	// Two calls — second should NOT have cookies
+	req, _ = http.NewRequest("GET", ts.URL+"/proxy/nosticky/init", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, _ = http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	req, _ = http.NewRequest("GET", ts.URL+"/proxy/nosticky/action", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, _ = http.DefaultClient.Do(req)
+	resp.Body.Close()
+}
+
+func TestSessionCookiesClearedOnLock(t *testing.T) {
+	callCount := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if callCount == 1 || callCount == 3 {
+			// Set cookies on first call of each session
+			http.SetCookie(w, &http.Cookie{Name: "AWSALB", Value: fmt.Sprintf("session%d", callCount), Path: "/"})
+		} else if callCount == 4 {
+			// After lock+unlock, cookies should be gone
+			if _, err := r.Cookie("AWSALB"); err == nil {
+				t.Error("cookies should be cleared after lock/unlock cycle")
+			}
+		}
+		fmt.Fprintf(w, `{"ok":true}`)
+	}))
+	defer upstream.Close()
+
+	dir := t.TempDir()
+	store := vault.NewStore(dir)
+	server := NewServer(store, time.Hour, "")
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+
+	token := unlock(t, ts.URL, "master-password-12")
+
+	// Add service with session_cookies
+	svc := fmt.Sprintf(`{"name":"locktest","base_url":"%s","auth":{"type":"bearer","token":"t"},"tls_skip_verify":true,"session_cookies":true}`, upstream.URL)
+	req, _ := http.NewRequest("POST", ts.URL+"/services", bytes.NewReader([]byte(svc)))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	// First proxy call — sets cookies
+	req, _ = http.NewRequest("GET", ts.URL+"/proxy/locktest/init", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, _ = http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	// Lock the vault
+	req, _ = http.NewRequest("POST", ts.URL+"/auth/lock", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, _ = http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	// Unlock again
+	token = unlock(t, ts.URL, "master-password-12")
+
+	// Proxy call after lock/unlock — cookies should be gone
+	req, _ = http.NewRequest("GET", ts.URL+"/proxy/locktest/init", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, _ = http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	req, _ = http.NewRequest("GET", ts.URL+"/proxy/locktest/action", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, _ = http.DefaultClient.Do(req)
+	resp.Body.Close()
+}
+
 func TestNoHTTPProxyWhenEmpty(t *testing.T) {
 	// When httpProxyURL is empty, transport.Proxy should be nil (no proxy).
 	dir := t.TempDir()
