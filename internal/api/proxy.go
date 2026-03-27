@@ -121,7 +121,9 @@ func (s *Server) proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Inject session cookies if enabled for this service
 	if svc.SessionCookies {
-		s.getJar(serviceName).injectCookies(outReq)
+		jar := s.getJar(serviceName)
+		jar.injectCookies(outReq)
+		log.Printf("proxy %s cookies: inject %d stored cookies", serviceName, jar.cookieCount())
 	}
 
 	// Pick pre-built client (reused across requests, no per-request allocation)
@@ -153,7 +155,13 @@ func (s *Server) proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Capture upstream session cookies (stored server-side, never forwarded to client)
 	if svc.SessionCookies {
-		s.getJar(serviceName).captureCookies(resp)
+		jar := s.getJar(serviceName)
+		before := jar.cookieCount()
+		jar.captureCookies(resp)
+		after := jar.cookieCount()
+		if after != before {
+			log.Printf("proxy %s cookies: captured %d new (total %d)", serviceName, after-before, after)
+		}
 	}
 
 	// Copy response headers, filtering out security-sensitive ones

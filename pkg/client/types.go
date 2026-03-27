@@ -3,10 +3,18 @@ package client
 // ServiceInfo is a safe view of a service (no secrets exposed).
 // Matches the JSON shape returned by vault-server's GET /services endpoint.
 type ServiceInfo struct {
-	Name          string `json:"name"`
-	BaseURL       string `json:"base_url"`
-	AuthType      string `json:"auth_type"`
-	TLSSkipVerify bool   `json:"tls_skip_verify,omitempty"`
+	Name           string   `json:"name"`
+	BaseURL        string   `json:"base_url"`
+	AuthType       string   `json:"auth_type"`
+	TLSSkipVerify  bool     `json:"tls_skip_verify,omitempty"`
+	SessionCookies bool     `json:"session_cookies,omitempty"`
+	Scopes         []string `json:"scopes,omitempty"`
+	ExpiresAt      int64    `json:"expires_at,omitempty"`
+	TokenStatus    string   `json:"token_status,omitempty"`
+	SSHHost        string   `json:"ssh_host,omitempty"`
+	SSHPort        int      `json:"ssh_port,omitempty"`
+	SSHUser        string   `json:"ssh_user,omitempty"`
+	SSHConnected   bool     `json:"ssh_connected,omitempty"`
 }
 
 // TokenInfo describes an active token (no secret material).

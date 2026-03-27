@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -52,12 +53,17 @@ func (j *sessionCookieJar) captureCookies(resp *http.Response) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	for _, c := range cookies {
-		// Honor deletion signals (RFC 6265: Max-Age=0 or negative means delete)
-		if c.MaxAge < 0 || (c.MaxAge == 0 && c.RawExpires != "") {
+		log.Printf("cookie-jar: received Set-Cookie: %s (MaxAge=%d, Expires=%v, RawExpires=%q)", c.Name, c.MaxAge, c.Expires, c.RawExpires)
+		// Honor deletion signals (RFC 6265: Max-Age=0 means delete).
+		// In Go's net/http, MaxAge<0 means the server sent Max-Age=0 (delete now),
+		// while MaxAge==0 means the Max-Age attribute was absent (not a delete signal).
+		if c.MaxAge < 0 {
+			log.Printf("cookie-jar: %s deleted (MaxAge<0)", c.Name)
 			delete(j.cookies, c.Name)
 			continue
 		}
 		if !c.Expires.IsZero() && c.Expires.Before(time.Now()) {
+			log.Printf("cookie-jar: %s deleted (expired: %v)", c.Name, c.Expires)
 			delete(j.cookies, c.Name)
 			continue
 		}
