@@ -57,7 +57,8 @@ type Auth struct {
 	SSHUser          string `json:"ssh_user,omitempty"`
 	SSHKeyFileRef    string `json:"ssh_key_file_ref,omitempty"`   // references Files entry (PEM private key)
 	SSHKeyPassphrase string `json:"ssh_key_passphrase,omitempty"` // optional, encrypted at rest
-	SSHHostKey       string `json:"ssh_host_key,omitempty"`       // auto-saved on first connect (TOFU)
+	SSHHostKey       string   `json:"ssh_host_key,omitempty"`         // auto-saved on first connect (TOFU)
+	SSHAllowedCmds   []string `json:"ssh_allowed_commands,omitempty"` // if set, only these command prefixes are allowed
 }
 
 // File holds an encrypted credential file.

@@ -95,6 +95,14 @@ func (s *Server) sshExecHandler(w http.ResponseWriter, r *http.Request, service 
 	}
 	defer wipeSSHConfig(cfg)
 
+	// SEC-001: Enforce per-service command allowlist if configured.
+	if len(svc.Auth.SSHAllowedCmds) > 0 {
+		if !isCommandAllowed(req.Command, svc.Auth.SSHAllowedCmds) {
+			http.Error(w, `{"error":"command not in allowed list for this service"}`, http.StatusForbidden)
+			return
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
@@ -171,6 +179,11 @@ func (s *Server) sshUploadHandler(w http.ResponseWriter, r *http.Request, servic
 	remotePath := r.FormValue("remote_path")
 	if remotePath == "" {
 		http.Error(w, `{"error":"remote_path is required"}`, http.StatusBadRequest)
+		return
+	}
+	// SEC-002: Validate remote path to prevent writes to sensitive directories.
+	if err := validateRemotePath(remotePath); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 		return
 	}
 	modeStr := r.FormValue("mode")
@@ -272,6 +285,11 @@ func (s *Server) sshDownloadHandler(w http.ResponseWriter, r *http.Request, serv
 	}
 	if req.RemotePath == "" {
 		http.Error(w, `{"error":"remote_path is required"}`, http.StatusBadRequest)
+		return
+	}
+	// SEC-002: Validate remote path to prevent reads from sensitive directories.
+	if err := validateRemotePath(req.RemotePath); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 		return
 	}
 
@@ -386,6 +404,47 @@ func (s *Server) persistHostKey(serviceName string, result *internalssh.DialResu
 		return
 	}
 	log.Printf("ssh TOFU: saved host key for %q", serviceName)
+}
+
+// isCommandAllowed checks if cmd starts with any of the allowed prefixes.
+func isCommandAllowed(cmd string, allowed []string) bool {
+	for _, prefix := range allowed {
+		if cmd == prefix || strings.HasPrefix(cmd, prefix+" ") {
+			return true
+		}
+	}
+	return false
+}
+
+// SEC-002: blockedRemotePaths are directories that SFTP must never write to.
+var blockedRemotePaths = []string{
+	"/etc/",
+	"/root/.ssh/",
+	"/proc/",
+	"/sys/",
+	"/dev/",
+	"/boot/",
+	"/lib/",
+	"/lib64/",
+	"/sbin/",
+	"/usr/sbin/",
+}
+
+// validateRemotePath checks that a remote SFTP path is absolute and not targeting
+// sensitive system directories.
+func validateRemotePath(p string) error {
+	cleaned := path.Clean(p)
+	if !path.IsAbs(cleaned) {
+		return fmt.Errorf("remote_path must be absolute")
+	}
+	// Ensure cleaned path ends with / for prefix matching against directories
+	withSlash := cleaned + "/"
+	for _, blocked := range blockedRemotePaths {
+		if strings.HasPrefix(withSlash, blocked) {
+			return fmt.Errorf("remote_path targets a restricted directory")
+		}
+	}
+	return nil
 }
 
 // multipartFile wraps multipart.File to check size.

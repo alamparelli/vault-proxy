@@ -93,7 +93,8 @@ func (s *Server) proxyHandler(w http.ResponseWriter, r *http.Request) {
 	body := http.MaxBytesReader(w, r.Body, maxRequestBodySize)
 	outReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, body)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		// SEC-003: Don't leak URL-embedded tokens in error messages.
+		http.Error(w, `{"error":"failed to build upstream request"}`, http.StatusInternalServerError)
 		return
 	}
 
@@ -133,8 +134,11 @@ func (s *Server) proxyHandler(w http.ResponseWriter, r *http.Request) {
 		tokenID = tok.ID[:8]
 	}
 
+	// SEC-003: Sanitize error output to avoid leaking URL-embedded tokens.
+	logErr := sanitizeURLToken(err, svc)
+
 	if err != nil {
-		log.Printf("proxy %s %s %s -> error: %v (%s) token=%s", r.Method, serviceName, apiPath, err, duration, tokenID)
+		log.Printf("proxy %s %s %s -> error: %v (%s) token=%s", r.Method, serviceName, apiPath, logErr, duration, tokenID)
 		http.Error(w, `{"error":"upstream request failed"}`, http.StatusBadGateway)
 		return
 	}
@@ -312,4 +316,13 @@ func (s *Server) ensureServiceAccountToken(ctx context.Context, svc *vault.Servi
 	s.ScheduleTokenRefresh(svc.Name, updatedAuth.SAExpiresAt)
 
 	return result.AccessToken, nil
+}
+
+// sanitizeURLToken masks the auth token in error strings for url-type services
+// to prevent credential leakage in logs.
+func sanitizeURLToken(err error, svc *vault.Service) error {
+	if err == nil || svc.Auth.Type != "url" || svc.Auth.Token == "" {
+		return err
+	}
+	return fmt.Errorf("%s", strings.ReplaceAll(err.Error(), svc.Auth.Token, "***"))
 }
