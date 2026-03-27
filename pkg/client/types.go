@@ -15,6 +15,8 @@ type ServiceInfo struct {
 	SSHPort        int      `json:"ssh_port,omitempty"`
 	SSHUser        string   `json:"ssh_user,omitempty"`
 	SSHConnected   bool     `json:"ssh_connected,omitempty"`
+	HeaderName     string   `json:"header_name,omitempty"`
+	Username       string   `json:"username,omitempty"`
 }
 
 // TokenInfo describes an active token (no secret material).

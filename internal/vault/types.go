@@ -99,6 +99,8 @@ type ServiceInfo struct {
 	SSHUser       string   `json:"ssh_user,omitempty"`      // username (ssh_key only)
 	SSHConnected   bool     `json:"ssh_connected,omitempty"`   // true if TOFU host key is set
 	SessionCookies bool     `json:"session_cookies,omitempty"` // true if session cookie jar is enabled
+	HeaderName     string   `json:"header_name,omitempty"`     // header auth: header key name (not secret)
+	Username       string   `json:"username,omitempty"`        // basic auth: username (not secret)
 }
 
 // SafeInfo returns a secret-free view of the service.
@@ -118,6 +120,10 @@ func (s *Service) SafeInfo() ServiceInfo {
 	case "service_account":
 		info.ExpiresAt = s.Auth.SAExpiresAt
 		info.Scopes = s.Auth.SAScopes
+	case "header":
+		info.HeaderName = s.Auth.HeaderName
+	case "basic":
+		info.Username = s.Auth.Username
 	case "ssh_key":
 		info.SSHHost = s.Auth.SSHHost
 		info.SSHPort = s.Auth.SSHPort
