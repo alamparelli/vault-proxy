@@ -85,6 +85,46 @@ func (s *Server) addServiceHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, svc.SafeInfo())
 }
 
+// updateServiceHandler handles PUT /services/{name} — upserts the service.
+func (s *Server) updateServiceHandler(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/services/")
+	if name == "" {
+		http.Error(w, `{"error":"missing service name"}`, http.StatusBadRequest)
+		return
+	}
+
+	var svc vault.Service
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBodySize)
+	if err := json.NewDecoder(r.Body).Decode(&svc); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	svc.Name = name // enforce URL name over body
+	if svc.Auth.Type == "" {
+		http.Error(w, `{"error":"auth.type is required"}`, http.StatusBadRequest)
+		return
+	}
+	if svc.Auth.Type != "ssh_key" && svc.BaseURL == "" {
+		http.Error(w, `{"error":"base_url is required for non-SSH services"}`, http.StatusBadRequest)
+		return
+	}
+	if svc.Auth.Type != "ssh_key" {
+		if err := validateBaseURL(svc.BaseURL, svc.TLSSkipVerify); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+			return
+		}
+	}
+	if err := s.validateAuthType(&svc); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	if err := s.store.AddService(&svc); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, svc.SafeInfo())
+}
+
 // deleteServiceHandler handles DELETE /services/{name}
 func (s *Server) deleteServiceHandler(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/services/")

@@ -97,6 +97,7 @@ type ServiceInfo struct {
 	SSHHost       string   `json:"ssh_host,omitempty"`      // hostname or IP (ssh_key only)
 	SSHPort       int      `json:"ssh_port,omitempty"`      // port (ssh_key only)
 	SSHUser       string   `json:"ssh_user,omitempty"`      // username (ssh_key only)
+	SSHKeyFileRef  string   `json:"ssh_key_file_ref,omitempty"` // file reference name (not secret)
 	SSHConnected   bool     `json:"ssh_connected,omitempty"`   // true if TOFU host key is set
 	SessionCookies bool     `json:"session_cookies,omitempty"` // true if session cookie jar is enabled
 	HeaderName     string   `json:"header_name,omitempty"`     // header auth: header key name (not secret)
@@ -128,6 +129,7 @@ func (s *Service) SafeInfo() ServiceInfo {
 		info.SSHHost = s.Auth.SSHHost
 		info.SSHPort = s.Auth.SSHPort
 		info.SSHUser = s.Auth.SSHUser
+		info.SSHKeyFileRef = s.Auth.SSHKeyFileRef
 		info.SSHConnected = s.Auth.SSHHostKey != ""
 	}
 	if info.ExpiresAt > 0 {

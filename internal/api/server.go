@@ -429,6 +429,13 @@ func (s *Server) servicesDetailRouter(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		s.getServiceHandler(w, r)
+	case http.MethodPut:
+		tok := tokenFromContext(r)
+		if tok == nil || tok.Scope != ScopeAdmin {
+			http.Error(w, `{"error":"admin scope required"}`, http.StatusForbidden)
+			return
+		}
+		s.updateServiceHandler(w, r)
 	case http.MethodDelete:
 		tok := tokenFromContext(r)
 		if tok == nil || tok.Scope != ScopeAdmin {

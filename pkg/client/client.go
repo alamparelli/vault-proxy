@@ -138,6 +138,19 @@ func (c *Client) AddService(jsonPayload io.Reader) error {
 	return nil
 }
 
+// UpdateService updates an existing service via PUT /services/{name}.
+func (c *Client) UpdateService(name string, jsonPayload io.Reader) error {
+	resp, err := c.do("PUT", "/services/"+name, jsonPayload)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return readError(resp)
+	}
+	return nil
+}
+
 // RemoveService deletes a service by name.
 func (c *Client) RemoveService(name string) error {
 	resp, err := c.do("DELETE", "/services/"+name, nil)
