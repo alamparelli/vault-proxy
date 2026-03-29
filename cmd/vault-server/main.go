@@ -61,17 +61,26 @@ func main() {
 		srv.Shutdown(ctx)
 	}()
 
+	// Bind the listener BEFORE logging to avoid printing "listening" when the
+	// port is actually unavailable. net.Listen sets SO_REUSEADDR automatically,
+	// allowing fast restarts even when the port is in TIME_WAIT.
+	ln, err := net.Listen("tcp", *listen)
+	if err != nil {
+		log.Fatalf("bind %s: %v", *listen, err)
+	}
+
 	if *tlsCert != "" && *tlsKey != "" {
 		srv.TLSConfig = &tls.Config{
 			MinVersion: tls.VersionTLS12,
 		}
 		log.Printf("vault-proxy listening on %s (TLS, data: %s)", *listen, *dataDir)
-		if err := srv.ListenAndServeTLS(*tlsCert, *tlsKey); err != nil && err != http.ErrServerClosed {
+		tlsLn := tls.NewListener(ln, srv.TLSConfig)
+		if err := srv.ServeTLS(tlsLn, *tlsCert, *tlsKey); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server error: %v", err)
 		}
 	} else {
 		log.Printf("vault-proxy listening on %s (data: %s)", *listen, *dataDir)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server error: %v", err)
 		}
 	}
