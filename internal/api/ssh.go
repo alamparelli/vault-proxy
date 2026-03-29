@@ -358,11 +358,15 @@ func (s *Server) sshConfig(serviceName string) (*vault.Service, *internalssh.Con
 		return nil, nil, fmt.Errorf("ssh key file %q: %w", svc.Auth.SSHKeyFileRef, err)
 	}
 
+	// Copy key data so wipeSSHConfig doesn't zero the store's copy.
+	keyCopy := make([]byte, len(keyFile.Data))
+	copy(keyCopy, keyFile.Data)
+
 	cfg := &internalssh.Config{
 		Host:       svc.Auth.SSHHost,
 		Port:       svc.Auth.SSHPort,
 		User:       svc.Auth.SSHUser,
-		PrivateKey: keyFile.Data,
+		PrivateKey: keyCopy,
 		HostKey:    svc.Auth.SSHHostKey,
 	}
 	if svc.Auth.SSHKeyPassphrase != "" {
