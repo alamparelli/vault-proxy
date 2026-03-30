@@ -4,10 +4,12 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,9 +18,10 @@ import (
 )
 
 const (
-	defaultAddr = "http://127.0.0.1:8390"
-	envAddr     = "VAULT_ADDR"
-	envToken    = "VAULT_TOKEN"
+	defaultAddr  = "http://127.0.0.1:8390"
+	envAddr      = "VAULT_ADDR"
+	envToken     = "VAULT_TOKEN"
+	envProxySock = "VAULT_PROXY_SOCK"
 )
 
 // Client talks to the vault server. Portable — any Go tool can import this.
@@ -29,8 +32,18 @@ type Client struct {
 }
 
 // New creates a client from environment variables.
+// Detection order:
+//  1. VAULT_PROXY_SOCK → Unix socket (no token needed, proxy injects it)
+//  2. VAULT_ADDR with "unix:" prefix → Unix socket with token
+//  3. VAULT_ADDR or default TCP address
 func New() *Client {
+	if sock := os.Getenv(envProxySock); sock != "" {
+		return NewWithSocket(sock, "")
+	}
 	addr := os.Getenv(envAddr)
+	if strings.HasPrefix(addr, "unix:") {
+		return NewWithSocket(strings.TrimPrefix(addr, "unix:"), os.Getenv(envToken))
+	}
 	if addr == "" {
 		addr = defaultAddr
 	}
@@ -50,6 +63,23 @@ func NewWithToken(addr, token string) *Client {
 		Addr:   strings.TrimRight(addr, "/"),
 		Token:  token,
 		client: &http.Client{Timeout: 60 * time.Second},
+	}
+}
+
+// NewWithSocket creates a client that connects via a Unix domain socket.
+// The Addr is set to "http://localhost" as a dummy for http.NewRequest.
+func NewWithSocket(socketPath, token string) *Client {
+	return &Client{
+		Addr:  "http://localhost",
+		Token: token,
+		client: &http.Client{
+			Timeout: 60 * time.Second,
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+				},
+			},
+		},
 	}
 }
 
@@ -403,6 +433,22 @@ func (c *Client) SSHSessionURL(service string) string {
 	addr = strings.Replace(addr, "http://", "ws://", 1)
 	addr = strings.Replace(addr, "https://", "wss://", 1)
 	return addr + "/ssh/" + service + "/session"
+}
+
+// Do sends a raw HTTP request to vault-server.
+// The caller is responsible for closing the response body.
+func (c *Client) Do(method, path string, body io.Reader) (*http.Response, error) {
+	return c.do(method, path, body)
+}
+
+// DoRequest sends a pre-built HTTP request through the client's transport.
+// Use this for requests that need custom headers (e.g. multipart uploads).
+// The request URL must use c.Addr as the base.
+func (c *Client) DoRequest(req *http.Request) (*http.Response, error) {
+	if c.Token != "" && req.Header.Get("Authorization") == "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	return c.client.Do(req)
 }
 
 func (c *Client) do(method, path string, body io.Reader) (*http.Response, error) {

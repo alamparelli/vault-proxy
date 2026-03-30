@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -30,11 +31,6 @@ func main() {
 		log.Fatalf("create data dir: %v", err)
 	}
 
-	// Safety check: refuse non-loopback bind without TLS
-	if *tlsCert == "" && !isLoopback(*listen) {
-		log.Fatalf("refusing to bind to %s without TLS — master password would be sent in cleartext. Use --tls-cert and --tls-key, or bind to 127.0.0.1", *listen)
-	}
-
 	// Ignore SIGPIPE to prevent crashes when stdout/stderr pipe breaks
 	// (common in containerized environments where logging pipes can close).
 	signal.Ignore(syscall.SIGPIPE)
@@ -43,7 +39,6 @@ func main() {
 	server := api.NewServer(store, *tokenTTL, *httpProxy)
 
 	srv := &http.Server{
-		Addr:         *listen,
 		Handler:      server,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
@@ -61,27 +56,47 @@ func main() {
 		srv.Shutdown(ctx)
 	}()
 
-	// Bind the listener BEFORE logging to avoid printing "listening" when the
-	// port is actually unavailable. net.Listen sets SO_REUSEADDR automatically,
-	// allowing fast restarts even when the port is in TIME_WAIT.
-	ln, err := net.Listen("tcp", *listen)
-	if err != nil {
-		log.Fatalf("bind %s: %v", *listen, err)
-	}
-
-	if *tlsCert != "" && *tlsKey != "" {
-		srv.TLSConfig = &tls.Config{
-			MinVersion: tls.VersionTLS12,
+	// Bind listener — Unix socket or TCP.
+	var (
+		ln  net.Listener
+		err error
+	)
+	if strings.HasPrefix(*listen, "unix:") {
+		sockPath := strings.TrimPrefix(*listen, "unix:")
+		os.Remove(sockPath) // clear stale socket
+		ln, err = net.Listen("unix", sockPath)
+		if err != nil {
+			log.Fatalf("bind unix %s: %v", sockPath, err)
 		}
-		log.Printf("vault-proxy listening on %s (TLS, data: %s)", *listen, *dataDir)
-		tlsLn := tls.NewListener(ln, srv.TLSConfig)
-		if err := srv.ServeTLS(tlsLn, *tlsCert, *tlsKey); err != nil && err != http.ErrServerClosed {
+		os.Chmod(sockPath, 0660)
+		log.Printf("vault-proxy listening on unix:%s (data: %s)", sockPath, *dataDir)
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server error: %v", err)
 		}
 	} else {
-		log.Printf("vault-proxy listening on %s (data: %s)", *listen, *dataDir)
-		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("server error: %v", err)
+		// Safety check: refuse non-loopback bind without TLS
+		if *tlsCert == "" && !isLoopback(*listen) {
+			log.Fatalf("refusing to bind to %s without TLS — master password would be sent in cleartext. Use --tls-cert and --tls-key, or bind to 127.0.0.1", *listen)
+		}
+		srv.Addr = *listen
+		ln, err = net.Listen("tcp", *listen)
+		if err != nil {
+			log.Fatalf("bind %s: %v", *listen, err)
+		}
+		if *tlsCert != "" && *tlsKey != "" {
+			srv.TLSConfig = &tls.Config{
+				MinVersion: tls.VersionTLS12,
+			}
+			log.Printf("vault-proxy listening on %s (TLS, data: %s)", *listen, *dataDir)
+			tlsLn := tls.NewListener(ln, srv.TLSConfig)
+			if err := srv.ServeTLS(tlsLn, *tlsCert, *tlsKey); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("server error: %v", err)
+			}
+		} else {
+			log.Printf("vault-proxy listening on %s (data: %s)", *listen, *dataDir)
+			if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("server error: %v", err)
+			}
 		}
 	}
 
