@@ -208,6 +208,92 @@ func (s *Server) validateAuthType(svc *vault.Service) error {
 		if _, err := s.store.GetFile(svc.Auth.SSHKeyFileRef); err != nil {
 			return fmt.Errorf("ssh_key_file_ref %q: %w", svc.Auth.SSHKeyFileRef, err)
 		}
+	case "imap":
+		if svc.Auth.IMAPHost == "" || svc.Auth.IMAPUser == "" || svc.Auth.IMAPPassword == "" {
+			return fmt.Errorf("imap requires imap_host, imap_user, and imap_password")
+		}
+		if svc.Auth.IMAPTLS == "" {
+			svc.Auth.IMAPTLS = "implicit"
+		}
+		if !isValidTLSMode(svc.Auth.IMAPTLS) {
+			return fmt.Errorf("imap_tls must be implicit, starttls, or none")
+		}
+		if svc.Auth.IMAPPort == 0 {
+			if svc.Auth.IMAPTLS == "implicit" {
+				svc.Auth.IMAPPort = 993
+			} else {
+				svc.Auth.IMAPPort = 143
+			}
+		}
+		if err := validatePort(svc.Auth.IMAPPort); err != nil {
+			return fmt.Errorf("invalid imap_port: %w", err)
+		}
+		if err := validateSSHHost(svc.Auth.IMAPHost); err != nil {
+			return fmt.Errorf("invalid imap_host: %w", err)
+		}
+	case "smtp":
+		if svc.Auth.SMTPHost == "" || svc.Auth.SMTPUser == "" || svc.Auth.SMTPPassword == "" {
+			return fmt.Errorf("smtp requires smtp_host, smtp_user, and smtp_password")
+		}
+		if svc.Auth.SMTPTLS == "" {
+			svc.Auth.SMTPTLS = "starttls"
+		}
+		if !isValidTLSMode(svc.Auth.SMTPTLS) {
+			return fmt.Errorf("smtp_tls must be implicit, starttls, or none")
+		}
+		if svc.Auth.SMTPPort == 0 {
+			switch svc.Auth.SMTPTLS {
+			case "implicit":
+				svc.Auth.SMTPPort = 465
+			case "starttls":
+				svc.Auth.SMTPPort = 587
+			default:
+				svc.Auth.SMTPPort = 25
+			}
+		}
+		if err := validatePort(svc.Auth.SMTPPort); err != nil {
+			return fmt.Errorf("invalid smtp_port: %w", err)
+		}
+		if err := validateSSHHost(svc.Auth.SMTPHost); err != nil {
+			return fmt.Errorf("invalid smtp_host: %w", err)
+		}
+	case "redis":
+		if svc.Auth.RedisHost == "" {
+			return fmt.Errorf("redis requires redis_host")
+		}
+		if svc.Auth.RedisPort == 0 {
+			svc.Auth.RedisPort = 6379
+		}
+		if err := validatePort(svc.Auth.RedisPort); err != nil {
+			return fmt.Errorf("invalid redis_port: %w", err)
+		}
+		if svc.Auth.RedisDB < 0 {
+			return fmt.Errorf("redis_db must be >= 0")
+		}
+		if err := validateSSHHost(svc.Auth.RedisHost); err != nil {
+			return fmt.Errorf("invalid redis_host: %w", err)
+		}
+	case "postgres":
+		if svc.Auth.PostgresHost == "" || svc.Auth.PostgresUser == "" || svc.Auth.PostgresPassword == "" || svc.Auth.PostgresDB == "" {
+			return fmt.Errorf("postgres requires postgres_host, postgres_user, postgres_password, and postgres_db")
+		}
+		if svc.Auth.PostgresTLS == "" {
+			svc.Auth.PostgresTLS = "require"
+		}
+		switch svc.Auth.PostgresTLS {
+		case "require", "prefer", "disable":
+		default:
+			return fmt.Errorf("postgres_tls must be require, prefer, or disable")
+		}
+		if svc.Auth.PostgresPort == 0 {
+			svc.Auth.PostgresPort = 5432
+		}
+		if err := validatePort(svc.Auth.PostgresPort); err != nil {
+			return fmt.Errorf("invalid postgres_port: %w", err)
+		}
+		if err := validateSSHHost(svc.Auth.PostgresHost); err != nil {
+			return fmt.Errorf("invalid postgres_host: %w", err)
+		}
 	default:
 		return fmt.Errorf("unsupported auth type: %s", svc.Auth.Type)
 	}
@@ -276,6 +362,20 @@ type googleClientCredentials struct {
 	ClientID     string `json:"client_id"`
 	ClientSecret string `json:"client_secret"`
 	TokenURI     string `json:"token_uri"`
+}
+
+// isValidTLSMode reports whether s is one of the accepted string modes
+// ("implicit", "starttls", "none") used by imap and smtp.
+func isValidTLSMode(s string) bool {
+	return s == "implicit" || s == "starttls" || s == "none"
+}
+
+// validatePort rejects ports outside the TCP/IP range.
+func validatePort(p int) error {
+	if p < 1 || p > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535")
+	}
+	return nil
 }
 
 // validateSSHHost validates a hostname/IP for SSH connections.

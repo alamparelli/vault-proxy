@@ -419,6 +419,144 @@ For internal services with self-signed certificates, add `tls_skip_verify: true`
 
 ---
 
+## Auth Type: `imap` / `smtp` / `redis` / `postgres`
+
+These four auth types share the same **auth-only TCP proxy** pattern:
+
+1. You store credentials in the vault.
+2. A client asks `POST /{proto}/{name}/session` and receives an ephemeral
+   `127.0.0.1:PORT` address plus an expiry timestamp.
+3. Vault binds the listener, dials the upstream service, negotiates TLS, and
+   completes the credential handshake using the stored password.
+4. On the first connection to the listener vault synthesises the minimum
+   client-facing handshake (greeting + a canned OK to any local LOGIN/AUTH)
+   so that standard client libraries work without modification.
+5. After both sides are post-auth, vault is a dumb bidirectional byte pipe.
+   All protocol semantics (FETCH, MAIL, SELECT, queries, …) live in the
+   caller — never in vault.
+6. The listener accepts exactly one connection before closing, and it
+   auto-expires if no one connects within 30 s (override with `?timeout=N`,
+   capped at 300 s).
+
+### IMAP (inbound mail)
+
+```bash
+curl -X POST http://localhost:8390/services \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "work-mail",
+    "auth": {
+      "type": "imap",
+      "imap_host": "imap.fastmail.com",
+      "imap_user": "you@example.com",
+      "imap_password": "app-password",
+      "imap_tls": "implicit"
+    }
+  }'
+```
+
+Fields:
+
+| Field | Default | Notes |
+|---|---|---|
+| `imap_host` | — | required |
+| `imap_port` | 993 (`implicit`), 143 otherwise | |
+| `imap_user` | — | required |
+| `imap_password` | — | required; wiped from memory after handshake |
+| `imap_tls` | `implicit` | `implicit` / `starttls` / `none` |
+
+Open a session:
+
+```bash
+curl -X POST http://localhost:8390/imap/work-mail/session \
+  -H "Authorization: Bearer PROXY_TOKEN"
+# → {"addr":"127.0.0.1:54321","expires_at":"..."}
+```
+
+Point any IMAP library (e.g. `go-imap`, `imaplib`, Thunderbird, `fetchmail`)
+at that address. Use any placeholder user/password for the local LOGIN —
+vault ignores it.
+
+### SMTP (outbound mail)
+
+```bash
+curl -X POST http://localhost:8390/services \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "work-send",
+    "auth": {
+      "type": "smtp",
+      "smtp_host": "smtp.fastmail.com",
+      "smtp_user": "you@example.com",
+      "smtp_password": "app-password",
+      "smtp_tls": "starttls"
+    }
+  }'
+```
+
+Defaults: port 587 for `starttls`, 465 for `implicit`, 25 for `none`.
+
+### Redis
+
+```bash
+curl -X POST http://localhost:8390/services \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "cache",
+    "auth": {
+      "type": "redis",
+      "redis_host": "10.0.0.5",
+      "redis_port": 6379,
+      "redis_username": "cache-user",
+      "redis_password": "s3cret",
+      "redis_db": 1
+    }
+  }'
+```
+
+All fields after `redis_host` are optional. `redis_tls: true` wraps the
+upstream with TLS. Redis clients can connect without any AUTH command.
+
+### Postgres
+
+```bash
+curl -X POST http://localhost:8390/services \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "app-db",
+    "auth": {
+      "type": "postgres",
+      "postgres_host": "db.internal",
+      "postgres_user": "app",
+      "postgres_password": "s3cret",
+      "postgres_db": "production",
+      "postgres_tls": "require"
+    }
+  }'
+```
+
+Only SCRAM-SHA-256 and cleartext-password upstream auth are supported. The
+local leg presents an AuthenticationCleartextPassword challenge — the
+password your client sends is discarded, so configure any value.
+
+**Constraint:** the local Postgres leg is plaintext on loopback. TLS to the
+local listener is declined (SSLRequest → `N`). TLS to the real upstream is
+enforced by default (`postgres_tls: "require"`).
+
+### Security notes
+
+- Listeners always bind `127.0.0.1`. Never exposed off-host.
+- Proxy-scope tokens suffice; stored passwords are never returned over the API.
+- Locking the vault closes every open listener and wipes in-memory passwords.
+- `tls_skip_verify: true` on the service (top-level, not inside `auth`) relaxes
+  upstream certificate verification — use only for self-signed test services.
+
+---
+
 ## Token Scopes
 
 The vault uses two token scopes:

@@ -126,6 +126,10 @@ curl -X POST http://127.0.0.1:8390/proxy/openrouter/v1/chat/completions \
 | `oauth2_client` | OAuth2 with refresh token (Google APIs, etc.) | Yes |
 | `service_account` | Google service account JWT exchange | Yes |
 | `ssh_key` | SSH key authentication (exec, upload, download) | No |
+| `imap` | IMAP inbound (auth-only; clients connect to ephemeral local port) | No |
+| `smtp` | SMTP outbound (auth-only; clients connect to ephemeral local port) | No |
+| `redis` | Redis AUTH + SELECT (auth-only; clients connect to ephemeral local port) | No |
+| `postgres` | Postgres SCRAM-SHA-256 (auth-only; clients connect to ephemeral local port) | No |
 
 See [docs/AUTH_SETUP.md](docs/AUTH_SETUP.md) for detailed setup instructions for each auth type, including OAuth2 browser flow and file-based setup.
 
@@ -204,6 +208,56 @@ See [docs/AUTH_SETUP.md](docs/AUTH_SETUP.md) for detailed setup instructions for
     "ssh_allowed_commands": ["docker ps", "docker logs", "systemctl status"]
   }
 }'
+
+# IMAP / SMTP / Redis / Postgres — auth-only TCP proxies
+# Vault dials upstream, negotiates TLS, authenticates with stored creds, then
+# binds a one-shot listener on 127.0.0.1 that any standard client library can
+# use. No mail/data logic lives in vault.
+./vault-cli service add '{
+  "name": "work-mail",
+  "auth": {
+    "type": "imap",
+    "imap_host": "imap.fastmail.com",
+    "imap_user": "you@example.com",
+    "imap_password": "app-password",
+    "imap_tls": "implicit"
+  }
+}'
+
+./vault-cli service add '{
+  "name": "work-send",
+  "auth": {
+    "type": "smtp",
+    "smtp_host": "smtp.fastmail.com",
+    "smtp_user": "you@example.com",
+    "smtp_password": "app-password",
+    "smtp_tls": "starttls"
+  }
+}'
+
+./vault-cli service add '{
+  "name": "cache",
+  "auth": {"type": "redis", "redis_host": "10.0.0.5", "redis_password": "..."}
+}'
+
+./vault-cli service add '{
+  "name": "app-db",
+  "auth": {
+    "type": "postgres",
+    "postgres_host": "db.internal",
+    "postgres_user": "app",
+    "postgres_password": "...",
+    "postgres_db": "production"
+  }
+}'
+
+# Use: each call prints "127.0.0.1:PORT" on stdout — point any standard
+# client at that address. One accept per listener, 30s default timeout.
+ADDR=$(./vault-cli imap work-mail)
+openssl s_client -connect $ADDR   # already authenticated, ready for SELECT INBOX
+
+ADDR=$(./vault-cli postgres app-db)
+psql "host=127.0.0.1 port=${ADDR##*:} user=anything dbname=anything"
 ```
 
 ### Session Cookies (Sticky Sessions)
@@ -271,6 +325,10 @@ Store credential files (service account JSONs, client secrets) encrypted in the 
 | `DELETE` | `/tokens/{id}` | admin | Revoke token |
 | `POST` | `/auth/oauth2/authorize` | admin | Start OAuth2 browser flow |
 | `GET` | `/auth/oauth2/callback` | none | OAuth2 callback (browser redirect) |
+| `POST` | `/imap/{name}/session` | session | Open one-shot authenticated IMAP listener on 127.0.0.1 |
+| `POST` | `/smtp/{name}/session` | session | Open one-shot authenticated SMTP listener on 127.0.0.1 |
+| `POST` | `/redis/{name}/session` | session | Open one-shot authenticated Redis listener on 127.0.0.1 |
+| `POST` | `/postgres/{name}/session` | session | Open one-shot authenticated Postgres listener on 127.0.0.1 |
 
 ## Configuration
 
@@ -312,9 +370,15 @@ cmd/
   vault-server/    Server binary (HTTP API + proxy)
   vault-cli/       CLI binary (human + AI agent interface)
 internal/
-  api/             HTTP handlers, auth middleware, proxy
+  api/             HTTP handlers, auth middleware, proxy, session routing
   crypto/          AES-256-GCM encryption, Argon2id KDF
   oauth2/          OAuth2 refresh + service account JWT exchange
+  ssh/             SSH client (exec/upload/download)
+  imap/            IMAP auth-only driver
+  smtp/            SMTP auth-only driver
+  redis/           Redis auth-only driver
+  postgres/        Postgres SCRAM auth-only driver
+  netproxy/        Ephemeral 127.0.0.1 listener + ProtocolDriver interface
   vault/           Encrypted store, types
 pkg/
   client/          Go SDK (importable by any Go project)

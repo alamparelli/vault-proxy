@@ -27,9 +27,15 @@ func main() {
 	// When symlinked as "vault" in tools.d/, supports shorthand:
 	//   vault proxy <service> <method> <path> [body]
 	bin := filepath.Base(os.Args[0])
-	if bin == "vault" && len(os.Args) >= 2 && os.Args[1] == "proxy" {
-		proxyShorthand(os.Args[2:])
-		return
+	if bin == "vault" && len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "proxy":
+			proxyShorthand(os.Args[2:])
+			return
+		case "ssh":
+			cmdSSH(os.Args[2:])
+			return
+		}
 	}
 
 	cmd := os.Args[1]
@@ -94,6 +100,10 @@ func main() {
 			fmt.Fprintf(os.Stderr, "unknown token command: %s\n", args[0])
 			os.Exit(1)
 		}
+	case "ssh":
+		cmdSSH(args)
+	case "imap", "smtp", "redis", "postgres":
+		cmdTCPSession(cmd, args)
 	case "health":
 		cmdHealth()
 	default:
@@ -119,13 +129,19 @@ Commands:
   file delete <name>         Delete a file from the vault
   http                    Proxy an HTTP request (--service, --method, --path, --body)
   proxy <svc> <M> <path> [body]  Shorthand proxy (for AI agents)
+  ssh <service> <command>     Execute a command on a remote host via SSH
+  imap <service>              Open an authenticated IMAP session, print 127.0.0.1:PORT
+  smtp <service>              Open an authenticated SMTP session, print 127.0.0.1:PORT
+  redis <service>             Open an authenticated Redis session, print 127.0.0.1:PORT
+  postgres <service>          Open an authenticated Postgres session, print 127.0.0.1:PORT
   token create [scope]    Create a session token (admin|proxy, default: proxy)
   token list              List active tokens
   token revoke <id>       Revoke a token
 
 Environment:
-  VAULT_ADDR    Server address (default: http://127.0.0.1:8390)
-  VAULT_TOKEN   Session token (overrides ~/.vault-proxy/session)`)
+  VAULT_PROXY_SOCK  Unix socket path (highest priority, no token needed)
+  VAULT_ADDR        Server address (supports unix: scheme, default: http://127.0.0.1:8390)
+  VAULT_TOKEN       Session token (overrides ~/.vault-proxy/session)`)
 }
 
 func newClient() *client.Client {
@@ -472,6 +488,48 @@ func cmdFileDelete(args []string) {
 		os.Exit(1)
 	}
 	fmt.Println("File deleted.")
+}
+
+func cmdSSH(args []string) {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: vault ssh <service> <command>")
+		os.Exit(1)
+	}
+
+	service := args[0]
+	command := strings.Join(args[1:], " ")
+
+	c := newClient()
+	result, err := c.SSHExec(service, command, 60)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ssh error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if result.Stdout != "" {
+		fmt.Print(result.Stdout)
+	}
+	if result.Stderr != "" {
+		fmt.Fprint(os.Stderr, result.Stderr)
+	}
+	os.Exit(result.ExitCode)
+}
+
+// cmdTCPSession handles `vault-cli <imap|smtp|redis|postgres> <service>` —
+// opens a one-shot authenticated local listener and prints "127.0.0.1:PORT"
+// to stdout. Pipe into any native client pointed at that address.
+func cmdTCPSession(proto string, args []string) {
+	if len(args) < 1 {
+		fmt.Fprintf(os.Stderr, "usage: vault-cli %s <service>\n", proto)
+		os.Exit(1)
+	}
+	c := newClient()
+	sess, err := c.Session(proto, args[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s session failed: %v\n", proto, err)
+		os.Exit(1)
+	}
+	fmt.Println(sess.Addr)
 }
 
 func doRaw(c *client.Client, method, path string, body io.Reader) (*http.Response, error) {

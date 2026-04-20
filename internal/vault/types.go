@@ -19,7 +19,7 @@ type Service struct {
 
 // Auth holds credentials for a service.
 type Auth struct {
-	Type string `json:"type"` // bearer, header, basic, oauth2_client, service_account, ssh_key, url
+	Type string `json:"type"` // bearer, header, basic, oauth2_client, service_account, ssh_key, url, imap, smtp, redis, postgres
 
 	// bearer
 	Token string `json:"token,omitempty"`
@@ -60,6 +60,36 @@ type Auth struct {
 	SSHKeyPassphrase string `json:"ssh_key_passphrase,omitempty"` // optional, encrypted at rest
 	SSHHostKey       string   `json:"ssh_host_key,omitempty"`         // auto-saved on first connect (TOFU)
 	SSHAllowedCmds   []string `json:"ssh_allowed_commands,omitempty"` // if set, only these command prefixes are allowed
+
+	// imap
+	IMAPHost     string `json:"imap_host,omitempty"`
+	IMAPPort     int    `json:"imap_port,omitempty"`     // default 993
+	IMAPUser     string `json:"imap_user,omitempty"`
+	IMAPPassword string `json:"imap_password,omitempty"` // encrypted at rest; wiped after use
+	IMAPTLS      string `json:"imap_tls,omitempty"`      // "implicit" (default) | "starttls" | "none"
+
+	// smtp
+	SMTPHost     string `json:"smtp_host,omitempty"`
+	SMTPPort     int    `json:"smtp_port,omitempty"`     // default 587
+	SMTPUser     string `json:"smtp_user,omitempty"`
+	SMTPPassword string `json:"smtp_password,omitempty"` // encrypted at rest; wiped after use
+	SMTPTLS      string `json:"smtp_tls,omitempty"`      // "starttls" (default) | "implicit" | "none"
+
+	// redis
+	RedisHost     string `json:"redis_host,omitempty"`
+	RedisPort     int    `json:"redis_port,omitempty"`     // default 6379
+	RedisUsername string `json:"redis_username,omitempty"` // ACL (Redis 6+); optional
+	RedisPassword string `json:"redis_password,omitempty"` // optional (legacy AUTH or ACL)
+	RedisDB       int    `json:"redis_db,omitempty"`       // optional SELECT
+	RedisTLS      bool   `json:"redis_tls,omitempty"`
+
+	// postgres
+	PostgresHost     string `json:"postgres_host,omitempty"`
+	PostgresPort     int    `json:"postgres_port,omitempty"`     // default 5432
+	PostgresUser     string `json:"postgres_user,omitempty"`
+	PostgresPassword string `json:"postgres_password,omitempty"` // encrypted at rest
+	PostgresDB       string `json:"postgres_db,omitempty"`       // required startup param
+	PostgresTLS      string `json:"postgres_tls,omitempty"`      // "require" (default) | "prefer" | "disable"
 }
 
 // File holds an encrypted credential file.
@@ -102,6 +132,28 @@ type ServiceInfo struct {
 	SessionCookies bool     `json:"session_cookies,omitempty"` // true if session cookie jar is enabled
 	HeaderName     string   `json:"header_name,omitempty"`     // header auth: header key name (not secret)
 	Username       string   `json:"username,omitempty"`        // basic auth: username (not secret)
+
+	// imap / smtp (non-secret)
+	IMAPHost string `json:"imap_host,omitempty"`
+	IMAPPort int    `json:"imap_port,omitempty"`
+	IMAPUser string `json:"imap_user,omitempty"`
+	IMAPTLS  string `json:"imap_tls,omitempty"`
+	SMTPHost string `json:"smtp_host,omitempty"`
+	SMTPPort int    `json:"smtp_port,omitempty"`
+	SMTPUser string `json:"smtp_user,omitempty"`
+	SMTPTLS  string `json:"smtp_tls,omitempty"`
+
+	// redis / postgres (non-secret)
+	RedisHost     string `json:"redis_host,omitempty"`
+	RedisPort     int    `json:"redis_port,omitempty"`
+	RedisUsername string `json:"redis_username,omitempty"`
+	RedisDB       int    `json:"redis_db,omitempty"`
+	RedisTLS      bool   `json:"redis_tls,omitempty"`
+	PostgresHost  string `json:"postgres_host,omitempty"`
+	PostgresPort  int    `json:"postgres_port,omitempty"`
+	PostgresUser  string `json:"postgres_user,omitempty"`
+	PostgresDB    string `json:"postgres_db,omitempty"`
+	PostgresTLS   string `json:"postgres_tls,omitempty"`
 }
 
 // SafeInfo returns a secret-free view of the service.
@@ -131,6 +183,28 @@ func (s *Service) SafeInfo() ServiceInfo {
 		info.SSHUser = s.Auth.SSHUser
 		info.SSHKeyFileRef = s.Auth.SSHKeyFileRef
 		info.SSHConnected = s.Auth.SSHHostKey != ""
+	case "imap":
+		info.IMAPHost = s.Auth.IMAPHost
+		info.IMAPPort = s.Auth.IMAPPort
+		info.IMAPUser = s.Auth.IMAPUser
+		info.IMAPTLS = s.Auth.IMAPTLS
+	case "smtp":
+		info.SMTPHost = s.Auth.SMTPHost
+		info.SMTPPort = s.Auth.SMTPPort
+		info.SMTPUser = s.Auth.SMTPUser
+		info.SMTPTLS = s.Auth.SMTPTLS
+	case "redis":
+		info.RedisHost = s.Auth.RedisHost
+		info.RedisPort = s.Auth.RedisPort
+		info.RedisUsername = s.Auth.RedisUsername
+		info.RedisDB = s.Auth.RedisDB
+		info.RedisTLS = s.Auth.RedisTLS
+	case "postgres":
+		info.PostgresHost = s.Auth.PostgresHost
+		info.PostgresPort = s.Auth.PostgresPort
+		info.PostgresUser = s.Auth.PostgresUser
+		info.PostgresDB = s.Auth.PostgresDB
+		info.PostgresTLS = s.Auth.PostgresTLS
 	}
 	if info.ExpiresAt > 0 {
 		info.TokenStatus = TokenStatus(info.ExpiresAt)

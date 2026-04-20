@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/alamparelli/vault-proxy/internal/netproxy"
 	"github.com/alamparelli/vault-proxy/internal/vault"
 )
 
@@ -53,6 +54,9 @@ type Server struct {
 	// Per-service session cookie jars (in-memory only, cleared on lock)
 	cookieJars   map[string]*sessionCookieJar
 	cookieJarsMu sync.Mutex
+
+	// TCP session registry for imap/smtp/redis/postgres ephemeral listeners.
+	netSessions *netproxy.Registry
 }
 
 // NewServer creates a new API server.
@@ -141,6 +145,7 @@ func NewServer(store *vault.Store, tokenTTL time.Duration, httpProxyURL string) 
 		refreshLocks: make(map[string]*sync.Mutex),
 		pendingFlows: make(map[string]*pendingOAuth2Flow),
 		cookieJars:   make(map[string]*sessionCookieJar),
+		netSessions:  netproxy.NewRegistry(),
 		proxyClient: &http.Client{
 			Timeout:       30 * time.Second,
 			Transport:     safeTransport,
@@ -217,6 +222,12 @@ func (s *Server) routes() {
 
 	// SSH proxy (proxy scope)
 	s.mux.HandleFunc("/ssh/", s.requireAuth(ScopeProxy, s.sshRouter))
+
+	// TCP auth-only proxies (proxy scope)
+	s.mux.HandleFunc("/imap/", s.requireAuth(ScopeProxy, s.imapRouter))
+	s.mux.HandleFunc("/smtp/", s.requireAuth(ScopeProxy, s.smtpRouter))
+	s.mux.HandleFunc("/redis/", s.requireAuth(ScopeProxy, s.redisRouter))
+	s.mux.HandleFunc("/postgres/", s.requireAuth(ScopeProxy, s.postgresRouter))
 }
 
 // ServeHTTP implements http.Handler.
@@ -335,8 +346,9 @@ func (s *Server) lockHandler(w http.ResponseWriter, r *http.Request) {
 
 	s.tokens.RevokeAll()
 	s.clearCookieJars()
+	s.netSessions.CloseAll()
 	s.store.Lock()
-	log.Printf("vault locked, all tokens revoked, session cookies cleared")
+	log.Printf("vault locked, all tokens revoked, session cookies cleared, tcp sessions closed")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "locked"})
 }
 

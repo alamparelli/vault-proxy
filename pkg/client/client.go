@@ -427,6 +427,39 @@ func (c *Client) SSHDownload(service, remotePath string) (io.ReadCloser, error) 
 	return resp.Body, nil
 }
 
+// TCPSession is the response for an authenticated TCP session opened via
+// /imap/, /smtp/, /redis/, or /postgres/. Dial Addr with any standard client
+// library for the protocol; vault has already authenticated the upstream.
+type TCPSession struct {
+	Addr      string    `json:"addr"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// Session opens a one-shot authenticated TCP session for the named service.
+// proto must be one of "imap", "smtp", "redis", "postgres". The returned
+// Addr is always on 127.0.0.1 and accepts exactly one connection before
+// closing.
+func (c *Client) Session(proto, service string) (*TCPSession, error) {
+	switch proto {
+	case "imap", "smtp", "redis", "postgres":
+	default:
+		return nil, fmt.Errorf("unsupported protocol %q", proto)
+	}
+	resp, err := c.do("POST", "/"+proto+"/"+service+"/session", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var out TCPSession
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode session: %w", err)
+	}
+	return &out, nil
+}
+
 // SSHSessionURL returns the WebSocket URL for an interactive SSH session.
 func (c *Client) SSHSessionURL(service string) string {
 	addr := c.Addr
