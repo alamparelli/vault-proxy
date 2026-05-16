@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"log"
 	"net"
 	"time"
 )
@@ -148,6 +149,7 @@ func (d *Driver) DialAndAuthenticate(ctx context.Context) (net.Conn, error) {
 		conn.Close()
 		return nil, err
 	}
+	log.Printf("mongodb auth: user=%s authdb=%s mechanism=%s", d.cfg.User, d.cfg.AuthDB, hashSpec.name)
 	scram, err := newScramClient(d.cfg.User, d.cfg.Password, hashSpec)
 	if err != nil {
 		conn.Close()
