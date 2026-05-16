@@ -2,10 +2,12 @@ package mongodb
 
 import (
 	"crypto/hmac"
+	"crypto/md5" //nolint:gosec // MongoDB SCRAM-SHA-1 prehashes the password with MD5 — required by protocol, not security-sensitive
 	"crypto/rand"
 	"crypto/sha1" //nolint:gosec // legacy SCRAM-SHA-1 support required by MongoDB users created before Atlas migrated defaults to SHA-256
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"hash"
 	"strconv"
@@ -101,7 +103,17 @@ func (s *scramClient) clientFinal(serverFirst []byte) ([]byte, error) {
 		return nil, fmt.Errorf("bad iteration count %q", iterStr)
 	}
 
-	s.saltedPassword = pbkdf2.Key(s.password, salt, iterations, s.hashSpec.size, s.hashSpec.new)
+	// SCRAM-SHA-1 against MongoDB uses MongoDB's legacy password digest
+	// (hex(MD5(user + ":mongo:" + password))) as the input to PBKDF2 instead
+	// of the raw password. SCRAM-SHA-256 (post-MongoDB-4.0) uses the SASLprep
+	// password directly. Without this, SHA-1 auth fails with "bad auth" against
+	// any MongoDB server — see SERVER-2479 / SCRAM-SHA-1 mongoPasswordDigest.
+	pwdInput := s.password
+	if s.hashSpec.name == "SCRAM-SHA-1" {
+		sum := md5.Sum([]byte(s.user + ":mongo:" + string(s.password)))
+		pwdInput = []byte(hex.EncodeToString(sum[:]))
+	}
+	s.saltedPassword = pbkdf2.Key(pwdInput, salt, iterations, s.hashSpec.size, s.hashSpec.new)
 	clientKey := s.hmac(s.saltedPassword, []byte("Client Key"))
 	storedKey := s.hashOf(clientKey)
 
