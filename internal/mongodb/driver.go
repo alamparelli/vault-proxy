@@ -257,20 +257,27 @@ func (d *Driver) ServeLocal(local, _ net.Conn) error {
 	if err != nil {
 		return fmt.Errorf("read client hello: %w", err)
 	}
+
+	var doc Doc
 	switch hdr.OpCode {
 	case opMsgCode:
-		// new wire protocol
+		doc, _, err = ParseOpMsgBody(body)
+		if err != nil {
+			return fmt.Errorf("parse client hello (OP_MSG): %w", err)
+		}
 	case opQueryCode:
-		// legacy isMaster — we still reply, but most modern drivers do not use this.
-		return fmt.Errorf("legacy OP_QUERY hello not supported; client must use wire >= 6")
+		// Driver-spec mandated: every conformant driver sends an OP_QUERY hello
+		// on first connect (before it knows the wire version). We reply with an
+		// OP_REPLY containing the modern maxWireVersion; the driver upgrades to
+		// OP_MSG for all subsequent commands.
+		doc, err = ParseOpQueryBody(body)
+		if err != nil {
+			return fmt.Errorf("parse client hello (OP_QUERY): %w", err)
+		}
 	default:
 		return fmt.Errorf("unexpected opcode %d on first message", hdr.OpCode)
 	}
 
-	doc, _, err := ParseOpMsgBody(body)
-	if err != nil {
-		return fmt.Errorf("parse client hello: %w", err)
-	}
 	if doc.Lookup("hello") == nil && doc.Lookup("isMaster") == nil && doc.Lookup("ismaster") == nil {
 		return fmt.Errorf("first message is not hello/isMaster")
 	}
@@ -294,6 +301,11 @@ func (d *Driver) ServeLocal(local, _ net.Conn) error {
 	}
 	if d.cfg.ReplicaSet != "" {
 		reply = append(reply, DocElem{Key: "setName", Value: d.cfg.ReplicaSet})
+	}
+	// Reply in the format the client asked in: OP_REPLY for legacy
+	// OP_QUERY hello, OP_MSG for modern ones.
+	if hdr.OpCode == opQueryCode {
+		return WriteOpReply(local, reply, hdr.RequestID)
 	}
 	return WriteOpMsgReply(local, reply, 0, hdr.RequestID)
 }

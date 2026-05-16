@@ -117,6 +117,71 @@ func ReadMessage(r io.Reader) (MsgHeader, []byte, error) {
 	return h, body, nil
 }
 
+// ParseOpQueryBody extracts the query document from an OP_QUERY body. The
+// legacy isMaster/hello handshake — sent by every conformant driver on the
+// very first packet of a fresh connection, before it knows the server's wire
+// version — uses this opcode. After parsing one such message and replying
+// with an OP_REPLY, drivers upgrade to OP_MSG for everything else.
+//
+// OP_QUERY body layout (little-endian):
+//
+//	int32 flags
+//	cstring fullCollectionName  // e.g. "admin.$cmd"
+//	int32 numberToSkip
+//	int32 numberToReturn
+//	document query
+//	(optional) document returnFieldsSelector — ignored
+func ParseOpQueryBody(body []byte) (Doc, error) {
+	if len(body) < 4 {
+		return nil, fmt.Errorf("OP_QUERY body too short")
+	}
+	off := 4 // skip flags
+	end := indexByte(body[off:], 0)
+	if end < 0 {
+		return nil, fmt.Errorf("OP_QUERY missing collection name terminator")
+	}
+	off += end + 1
+	if len(body)-off < 8 {
+		return nil, fmt.Errorf("OP_QUERY missing skip/return")
+	}
+	off += 8 // skip numberToSkip + numberToReturn
+	doc, _, err := DecodeDoc(body[off:])
+	if err != nil {
+		return nil, fmt.Errorf("OP_QUERY decode query: %w", err)
+	}
+	return doc, nil
+}
+
+// WriteOpReply emits a legacy OP_REPLY containing a single document. Used to
+// answer the initial OP_QUERY hello so drivers can negotiate up to OP_MSG.
+//
+// OP_REPLY body layout:
+//
+//	int32 responseFlags
+//	int64 cursorID
+//	int32 startingFrom
+//	int32 numberReturned
+//	document(s)
+func WriteOpReply(w io.Writer, doc Doc, responseTo int32) error {
+	body, err := EncodeDoc(doc)
+	if err != nil {
+		return err
+	}
+	// header (16) + responseFlags(4) + cursorID(8) + startingFrom(4) + numberReturned(4) + body
+	msg := make([]byte, 16+4+8+4+4+len(body))
+	binary.LittleEndian.PutUint32(msg[0:4], uint32(len(msg)))
+	binary.LittleEndian.PutUint32(msg[4:8], uint32(nextRequestID()))
+	binary.LittleEndian.PutUint32(msg[8:12], uint32(responseTo))
+	binary.LittleEndian.PutUint32(msg[12:16], uint32(opReplyCode))
+	binary.LittleEndian.PutUint32(msg[16:20], 0)            // responseFlags
+	binary.LittleEndian.PutUint64(msg[20:28], 0)            // cursorID
+	binary.LittleEndian.PutUint32(msg[28:32], 0)            // startingFrom
+	binary.LittleEndian.PutUint32(msg[32:36], 1)            // numberReturned
+	copy(msg[36:], body)
+	_, err = w.Write(msg)
+	return err
+}
+
 // ParseOpMsgBody extracts the first type-0 document from an OP_MSG body.
 // Returns the document plus the flagBits. Type-1 sections (sequences) are
 // skipped — we never need them for the handshake.
