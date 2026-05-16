@@ -26,17 +26,24 @@ import (
 
 // bsonElem types we emit.
 const (
-	bsonTypeDouble   byte = 0x01
-	bsonTypeString   byte = 0x02
-	bsonTypeDocument byte = 0x03
-	bsonTypeArray    byte = 0x04
-	bsonTypeBinary   byte = 0x05
-	bsonTypeBoolean  byte = 0x08
-	bsonTypeDateTime byte = 0x09
-	bsonTypeNull     byte = 0x0A
-	bsonTypeInt32    byte = 0x10
-	bsonTypeInt64    byte = 0x12
+	bsonTypeDouble    byte = 0x01
+	bsonTypeString    byte = 0x02
+	bsonTypeDocument  byte = 0x03
+	bsonTypeArray     byte = 0x04
+	bsonTypeBinary    byte = 0x05
+	bsonTypeObjectID  byte = 0x07
+	bsonTypeBoolean   byte = 0x08
+	bsonTypeDateTime  byte = 0x09
+	bsonTypeNull      byte = 0x0A
+	bsonTypeTimestamp byte = 0x11
+	bsonTypeInt32     byte = 0x10
+	bsonTypeInt64     byte = 0x12
 )
+
+// ObjectID is the BSON 12-byte ObjectId. We don't construct these, but
+// MongoDB embeds them in hello replies (processId, topologyVersion) so the
+// decoder needs to recognise them to walk past.
+type ObjectID [12]byte
 
 // Binary represents a BSON binary value with subtype.
 type Binary struct {
@@ -277,6 +284,21 @@ func decodeValue(typ byte, b []byte) (any, int, error) {
 			return nil, 0, fmt.Errorf("short int64")
 		}
 		return int64(binary.LittleEndian.Uint64(b[:8])), 8, nil
+	case bsonTypeObjectID:
+		if len(b) < 12 {
+			return nil, 0, fmt.Errorf("short objectid")
+		}
+		var oid ObjectID
+		copy(oid[:], b[:12])
+		return oid, 12, nil
+	case bsonTypeTimestamp:
+		// BSON Timestamp is 8 bytes (4 increment + 4 seconds). Used in
+		// MongoDB hello replies (operationTime, $clusterTime). We don't
+		// surface the value, just skip past it correctly.
+		if len(b) < 8 {
+			return nil, 0, fmt.Errorf("short timestamp")
+		}
+		return binary.LittleEndian.Uint64(b[:8]), 8, nil
 	default:
 		return nil, 0, fmt.Errorf("unsupported BSON type 0x%02x", typ)
 	}
