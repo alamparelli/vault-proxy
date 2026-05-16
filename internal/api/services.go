@@ -319,6 +319,14 @@ func (s *Server) validateAuthType(svc *vault.Service) error {
 		if svc.Auth.MongoPort == 0 {
 			svc.Auth.MongoPort = 27017
 		}
+		if svc.Auth.MongoMechanism == "" {
+			svc.Auth.MongoMechanism = "SCRAM-SHA-256"
+		}
+		switch svc.Auth.MongoMechanism {
+		case "SCRAM-SHA-256", "SCRAM-SHA-1":
+		default:
+			return fmt.Errorf("mongodb_mechanism must be SCRAM-SHA-256 or SCRAM-SHA-1")
+		}
 		if err := validatePort(svc.Auth.MongoPort); err != nil {
 			return fmt.Errorf("invalid mongodb_port: %w", err)
 		}

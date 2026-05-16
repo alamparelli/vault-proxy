@@ -3,21 +3,53 @@ package mongodb
 import (
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha1" //nolint:gosec // legacy SCRAM-SHA-1 support required by MongoDB users created before Atlas migrated defaults to SHA-256
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"hash"
 	"strconv"
 	"strings"
 
 	"golang.org/x/crypto/pbkdf2"
 )
 
-// SCRAM-SHA-256 client implementation operating on raw byte payloads. We do
-// NOT do channel binding (tls-server-end-point) — MongoDB does not negotiate
-// it and Apple/most clusters do not require it.
+// SCRAM client supporting both SCRAM-SHA-256 (default, preferred) and
+// SCRAM-SHA-1 (legacy — required by MongoDB users created before the cluster
+// was migrated to SHA-256, and by some self-hosted older deployments).
+//
+// MongoDB does NOT negotiate channel binding (tls-server-end-point), so we
+// always send the GS2 header "n,," and never include the c=biws extension's
+// channel binding token.
 
-// scramClient tracks an in-progress SCRAM-SHA-256 exchange.
+// scramHash is one of the two supported families.
+type scramHash struct {
+	name string // "SCRAM-SHA-256" | "SCRAM-SHA-1"
+	new  func() hash.Hash
+	size int
+}
+
+var (
+	scramSHA256 = scramHash{name: "SCRAM-SHA-256", new: sha256.New, size: sha256.Size}
+	scramSHA1   = scramHash{name: "SCRAM-SHA-1", new: sha1.New, size: sha1.Size}
+)
+
+// scramHashFor returns the hash spec for the named mechanism. An empty string
+// defaults to SCRAM-SHA-256 (modern, preferred).
+func scramHashFor(mech string) (scramHash, error) {
+	switch mech {
+	case "", "SCRAM-SHA-256":
+		return scramSHA256, nil
+	case "SCRAM-SHA-1":
+		return scramSHA1, nil
+	default:
+		return scramHash{}, fmt.Errorf("unsupported SCRAM mechanism %q", mech)
+	}
+}
+
+// scramClient tracks an in-progress SCRAM-SHA-{1,256} exchange.
 type scramClient struct {
+	hashSpec        scramHash
 	user            string
 	password        []byte
 	nonce           string
@@ -26,21 +58,21 @@ type scramClient struct {
 	saltedPassword  []byte
 }
 
-func newScramClient(user string, password []byte) (*scramClient, error) {
+func newScramClient(user string, password []byte, h scramHash) (*scramClient, error) {
 	buf := make([]byte, 18)
 	if _, err := rand.Read(buf); err != nil {
 		return nil, fmt.Errorf("scram nonce: %w", err)
 	}
 	return &scramClient{
+		hashSpec: h,
 		user:     user,
 		password: password,
 		nonce:    base64.RawStdEncoding.EncodeToString(buf),
 	}, nil
 }
 
-// clientFirst returns the SASL client-first-message payload (no GS2 channel
-// binding flag prefix). MongoDB expects the entire client-first message
-// including the "n,," GS2 header in the saslStart payload.
+// clientFirst returns the SASL client-first-message payload (with the "n,,"
+// GS2 header — MongoDB expects the entire client-first message in saslStart).
 func (s *scramClient) clientFirst() []byte {
 	s.clientFirstBare = "n=" + saslEscape(s.user) + ",r=" + s.nonce
 	return []byte("n,," + s.clientFirstBare)
@@ -69,14 +101,14 @@ func (s *scramClient) clientFinal(serverFirst []byte) ([]byte, error) {
 		return nil, fmt.Errorf("bad iteration count %q", iterStr)
 	}
 
-	s.saltedPassword = pbkdf2.Key(s.password, salt, iterations, sha256.Size, sha256.New)
-	clientKey := hmacSHA256(s.saltedPassword, []byte("Client Key"))
-	storedKey := sha256.Sum256(clientKey)
+	s.saltedPassword = pbkdf2.Key(s.password, salt, iterations, s.hashSpec.size, s.hashSpec.new)
+	clientKey := s.hmac(s.saltedPassword, []byte("Client Key"))
+	storedKey := s.hashOf(clientKey)
 
 	clientFinalWithoutProof := "c=biws,r=" + serverNonce // biws = base64("n,,")
 	s.authMessage = s.clientFirstBare + "," + string(serverFirst) + "," + clientFinalWithoutProof
 
-	clientSig := hmacSHA256(storedKey[:], []byte(s.authMessage))
+	clientSig := s.hmac(storedKey, []byte(s.authMessage))
 	proof := xorSlice(clientKey, clientSig)
 
 	return []byte(clientFinalWithoutProof + ",p=" + base64.StdEncoding.EncodeToString(proof)), nil
@@ -96,12 +128,24 @@ func (s *scramClient) verifyServerFinal(serverFinal []byte) error {
 	if err != nil {
 		return fmt.Errorf("decode server sig: %w", err)
 	}
-	serverKey := hmacSHA256(s.saltedPassword, []byte("Server Key"))
-	serverSig := hmacSHA256(serverKey, []byte(s.authMessage))
+	serverKey := s.hmac(s.saltedPassword, []byte("Server Key"))
+	serverSig := s.hmac(serverKey, []byte(s.authMessage))
 	if !hmac.Equal(expected, serverSig) {
 		return fmt.Errorf("server signature mismatch")
 	}
 	return nil
+}
+
+func (s *scramClient) hmac(key, data []byte) []byte {
+	h := hmac.New(s.hashSpec.new, key)
+	h.Write(data)
+	return h.Sum(nil)
+}
+
+func (s *scramClient) hashOf(data []byte) []byte {
+	h := s.hashSpec.new()
+	h.Write(data)
+	return h.Sum(nil)
 }
 
 func parseSaslMessage(s string) map[string]string {
@@ -131,12 +175,6 @@ func saslEscape(s string) string {
 		}
 	}
 	return b.String()
-}
-
-func hmacSHA256(key, data []byte) []byte {
-	h := hmac.New(sha256.New, key)
-	h.Write(data)
-	return h.Sum(nil)
 }
 
 func xorSlice(a, b []byte) []byte {

@@ -159,6 +159,7 @@ func (s *Server) mongodbSessionHandler(w http.ResponseWriter, r *http.Request, s
 		TLSMode:       svc.Auth.MongoTLS,
 		TLSSkipVerify: svc.TLSSkipVerify,
 		ReplicaSet:    svc.Auth.MongoReplicaSet,
+		Mechanism:     svc.Auth.MongoMechanism,
 	})
 	s.startSession(w, r, svc.Name, driver, driver.Wipe)
 }

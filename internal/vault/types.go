@@ -109,6 +109,7 @@ type Auth struct {
 	MongoAuthDB     string `json:"mongodb_auth_db,omitempty"`      // authSource, defaults to "admin"
 	MongoTLS        string `json:"mongodb_tls,omitempty"`          // "require" (default) | "prefer" | "disable"
 	MongoReplicaSet string `json:"mongodb_replica_set,omitempty"`  // optional, surfaced in hello reply
+	MongoMechanism  string `json:"mongodb_mechanism,omitempty"`    // "SCRAM-SHA-256" (default) | "SCRAM-SHA-1"
 }
 
 // File holds an encrypted credential file.
@@ -179,6 +180,7 @@ type ServiceInfo struct {
 	MongoAuthDB     string `json:"mongodb_auth_db,omitempty"`
 	MongoTLS        string `json:"mongodb_tls,omitempty"`
 	MongoReplicaSet string `json:"mongodb_replica_set,omitempty"`
+	MongoMechanism  string `json:"mongodb_mechanism,omitempty"`
 
 	// apple_jwt (non-secret)
 	AppleKeyID      string `json:"apple_key_id,omitempty"`
@@ -243,6 +245,7 @@ func (s *Service) SafeInfo() ServiceInfo {
 		info.MongoAuthDB = s.Auth.MongoAuthDB
 		info.MongoTLS = s.Auth.MongoTLS
 		info.MongoReplicaSet = s.Auth.MongoReplicaSet
+		info.MongoMechanism = s.Auth.MongoMechanism
 	case "apple_jwt":
 		info.AppleKeyID = s.Auth.AppleKeyID
 		info.AppleIssuerID = s.Auth.AppleIssuerID

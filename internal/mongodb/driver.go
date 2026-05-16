@@ -19,6 +19,7 @@ type Config struct {
 	TLSMode       string // "require" (default) | "prefer" | "disable"
 	TLSSkipVerify bool
 	ReplicaSet    string // optional, surfaced in synthesised hello replies
+	Mechanism     string // "SCRAM-SHA-256" (default) | "SCRAM-SHA-1"
 }
 
 // Driver implements netproxy.ProtocolDriver for MongoDB. The strategy:
@@ -50,6 +51,9 @@ func New(cfg *Config) *Driver {
 	}
 	if cfg.TLSMode == "" {
 		cfg.TLSMode = "require"
+	}
+	if cfg.Mechanism == "" {
+		cfg.Mechanism = "SCRAM-SHA-256"
 	}
 	return &Driver{cfg: cfg}
 }
@@ -138,8 +142,13 @@ func (d *Driver) DialAndAuthenticate(ctx context.Context) (net.Conn, error) {
 		return nil, fmt.Errorf("hello returned ok=%v: %v", okVal, helloDoc.Lookup("errmsg"))
 	}
 
-	// saslStart with SCRAM-SHA-256 client-first.
-	scram, err := newScramClient(d.cfg.User, d.cfg.Password)
+	// saslStart with the configured SCRAM mechanism (SHA-256 by default).
+	hashSpec, err := scramHashFor(d.cfg.Mechanism)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	scram, err := newScramClient(d.cfg.User, d.cfg.Password, hashSpec)
 	if err != nil {
 		conn.Close()
 		return nil, err
@@ -147,7 +156,7 @@ func (d *Driver) DialAndAuthenticate(ctx context.Context) (net.Conn, error) {
 	saslStart := Doc{
 		{Key: "saslStart", Value: int32(1)},
 		{Key: "$db", Value: d.cfg.AuthDB},
-		{Key: "mechanism", Value: "SCRAM-SHA-256"},
+		{Key: "mechanism", Value: hashSpec.name},
 		{Key: "payload", Value: Binary{Subtype: 0, Data: scram.clientFirst()}},
 		{Key: "options", Value: Doc{{Key: "skipEmptyExchange", Value: true}}},
 	}
