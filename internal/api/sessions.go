@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/alamparelli/vault-proxy/internal/imap"
+	"github.com/alamparelli/vault-proxy/internal/mongodb"
 	"github.com/alamparelli/vault-proxy/internal/netproxy"
 	"github.com/alamparelli/vault-proxy/internal/postgres"
 	"github.com/alamparelli/vault-proxy/internal/redis"
@@ -40,6 +41,11 @@ func (s *Server) redisRouter(w http.ResponseWriter, r *http.Request) {
 // postgresRouter dispatches POST /postgres/{service}/session.
 func (s *Server) postgresRouter(w http.ResponseWriter, r *http.Request) {
 	s.tcpSessionRouter(w, r, "/postgres/", "postgres", s.postgresSessionHandler)
+}
+
+// mongodbRouter dispatches POST /mongodb/{service}/session.
+func (s *Server) mongodbRouter(w http.ResponseWriter, r *http.Request) {
+	s.tcpSessionRouter(w, r, "/mongodb/", "mongodb", s.mongodbSessionHandler)
 }
 
 // tcpSessionRouter is the shared shape for {proto}/{svc}/session routing.
@@ -137,6 +143,22 @@ func (s *Server) postgresSessionHandler(w http.ResponseWriter, r *http.Request, 
 		Database:      svc.Auth.PostgresDB,
 		TLSMode:       svc.Auth.PostgresTLS,
 		TLSSkipVerify: svc.TLSSkipVerify,
+	})
+	s.startSession(w, r, svc.Name, driver, driver.Wipe)
+}
+
+func (s *Server) mongodbSessionHandler(w http.ResponseWriter, r *http.Request, svc *vault.Service) {
+	pw := make([]byte, len(svc.Auth.MongoPassword))
+	copy(pw, svc.Auth.MongoPassword)
+	driver := mongodb.New(&mongodb.Config{
+		Host:          svc.Auth.MongoHost,
+		Port:          svc.Auth.MongoPort,
+		User:          svc.Auth.MongoUser,
+		Password:      pw,
+		AuthDB:        svc.Auth.MongoAuthDB,
+		TLSMode:       svc.Auth.MongoTLS,
+		TLSSkipVerify: svc.TLSSkipVerify,
+		ReplicaSet:    svc.Auth.MongoReplicaSet,
 	})
 	s.startSession(w, r, svc.Name, driver, driver.Wipe)
 }

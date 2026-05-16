@@ -428,20 +428,21 @@ func (c *Client) SSHDownload(service, remotePath string) (io.ReadCloser, error) 
 }
 
 // TCPSession is the response for an authenticated TCP session opened via
-// /imap/, /smtp/, /redis/, or /postgres/. Dial Addr with any standard client
-// library for the protocol; vault has already authenticated the upstream.
+// /imap/, /smtp/, /redis/, /postgres/, or /mongodb/. Dial Addr with any
+// standard client library for the protocol; vault has already authenticated
+// the upstream.
 type TCPSession struct {
 	Addr      string    `json:"addr"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // Session opens a one-shot authenticated TCP session for the named service.
-// proto must be one of "imap", "smtp", "redis", "postgres". The returned
-// Addr is always on 127.0.0.1 and accepts exactly one connection before
-// closing.
+// proto must be one of "imap", "smtp", "redis", "postgres", "mongodb". The
+// returned Addr is always on 127.0.0.1 and accepts exactly one connection
+// before closing.
 func (c *Client) Session(proto, service string) (*TCPSession, error) {
 	switch proto {
-	case "imap", "smtp", "redis", "postgres":
+	case "imap", "smtp", "redis", "postgres", "mongodb":
 	default:
 		return nil, fmt.Errorf("unsupported protocol %q", proto)
 	}

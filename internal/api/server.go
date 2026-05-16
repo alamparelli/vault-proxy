@@ -228,6 +228,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/smtp/", s.requireAuth(ScopeProxy, s.smtpRouter))
 	s.mux.HandleFunc("/redis/", s.requireAuth(ScopeProxy, s.redisRouter))
 	s.mux.HandleFunc("/postgres/", s.requireAuth(ScopeProxy, s.postgresRouter))
+	s.mux.HandleFunc("/mongodb/", s.requireAuth(ScopeProxy, s.mongodbRouter))
 }
 
 // ServeHTTP implements http.Handler.

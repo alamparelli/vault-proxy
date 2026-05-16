@@ -125,11 +125,13 @@ curl -X POST http://127.0.0.1:8390/proxy/openrouter/v1/chat/completions \
 | `url` | Token in URL path (`{token}` placeholder in base_url) | No |
 | `oauth2_client` | OAuth2 with refresh token (Google APIs, etc.) | Yes |
 | `service_account` | Google service account JWT exchange | Yes |
+| `apple_jwt` | App Store Connect ES256 JWT (auto-resigned every 20min) | Yes |
 | `ssh_key` | SSH key authentication (exec, upload, download) | No |
 | `imap` | IMAP inbound (auth-only; clients connect to ephemeral local port) | No |
 | `smtp` | SMTP outbound (auth-only; clients connect to ephemeral local port) | No |
 | `redis` | Redis AUTH + SELECT (auth-only; clients connect to ephemeral local port) | No |
 | `postgres` | Postgres SCRAM-SHA-256 (auth-only; clients connect to ephemeral local port) | No |
+| `mongodb` | MongoDB SCRAM-SHA-256 (auth-only; clients connect to ephemeral local port) | No |
 
 See [docs/AUTH_SETUP.md](docs/AUTH_SETUP.md) for detailed setup instructions for each auth type, including OAuth2 browser flow and file-based setup.
 
@@ -209,7 +211,7 @@ See [docs/AUTH_SETUP.md](docs/AUTH_SETUP.md) for detailed setup instructions for
   }
 }'
 
-# IMAP / SMTP / Redis / Postgres — auth-only TCP proxies
+# IMAP / SMTP / Redis / Postgres / MongoDB — auth-only TCP proxies
 # Vault dials upstream, negotiates TLS, authenticates with stored creds, then
 # binds a one-shot listener on 127.0.0.1 that any standard client library can
 # use. No mail/data logic lives in vault.
@@ -248,6 +250,17 @@ See [docs/AUTH_SETUP.md](docs/AUTH_SETUP.md) for detailed setup instructions for
     "postgres_user": "app",
     "postgres_password": "...",
     "postgres_db": "production"
+  }
+}'
+
+./vault-cli service add '{
+  "name": "analytics-mongo",
+  "auth": {
+    "type": "mongodb",
+    "mongodb_host": "mongo.internal",
+    "mongodb_user": "analytics",
+    "mongodb_password": "...",
+    "mongodb_auth_db": "admin"
   }
 }'
 
@@ -329,6 +342,7 @@ Store credential files (service account JSONs, client secrets) encrypted in the 
 | `POST` | `/smtp/{name}/session` | session | Open one-shot authenticated SMTP listener on 127.0.0.1 |
 | `POST` | `/redis/{name}/session` | session | Open one-shot authenticated Redis listener on 127.0.0.1 |
 | `POST` | `/postgres/{name}/session` | session | Open one-shot authenticated Postgres listener on 127.0.0.1 |
+| `POST` | `/mongodb/{name}/session` | session | Open one-shot authenticated MongoDB listener on 127.0.0.1 |
 
 ## Configuration
 

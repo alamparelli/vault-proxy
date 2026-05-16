@@ -19,7 +19,7 @@ type Service struct {
 
 // Auth holds credentials for a service.
 type Auth struct {
-	Type string `json:"type"` // bearer, header, basic, oauth2_client, service_account, ssh_key, url, imap, smtp, redis, postgres
+	Type string `json:"type"` // bearer, header, basic, oauth2_client, service_account, apple_jwt, ssh_key, url, imap, smtp, redis, postgres, mongodb
 
 	// bearer
 	Token string `json:"token,omitempty"`
@@ -51,6 +51,16 @@ type Auth struct {
 	SATokenURL  string   `json:"sa_token_url,omitempty"`    // defaults to Google's
 	SAToken     string   `json:"sa_access_token,omitempty"`
 	SAExpiresAt int64    `json:"sa_expires_at,omitempty"`
+
+	// apple_jwt — App Store Connect API: ES256-signed JWT used directly as bearer.
+	// No upstream token exchange (unlike service_account); the JWT *is* the credential.
+	// Max lifetime per Apple is 20 minutes; we re-sign when within tokenExpiryBuffer.
+	AppleKeyID       string `json:"apple_key_id,omitempty"`       // 10-char Key ID from App Store Connect
+	AppleIssuerID    string `json:"apple_issuer_id,omitempty"`    // UUID of your team's issuer
+	AppleKeyFileRef  string `json:"apple_key_file_ref,omitempty"` // references Files entry (.p8 private key)
+	AppleAudience    string `json:"apple_audience,omitempty"`     // defaults to "appstoreconnect-v1"
+	AppleJWT         string `json:"apple_jwt,omitempty"`          // cached signed token
+	AppleJWTExpires  int64  `json:"apple_jwt_expires_at,omitempty"`
 
 	// ssh_key
 	SSHHost          string `json:"ssh_host,omitempty"`           // hostname or IP
@@ -90,6 +100,15 @@ type Auth struct {
 	PostgresPassword string `json:"postgres_password,omitempty"` // encrypted at rest
 	PostgresDB       string `json:"postgres_db,omitempty"`       // required startup param
 	PostgresTLS      string `json:"postgres_tls,omitempty"`      // "require" (default) | "prefer" | "disable"
+
+	// mongodb
+	MongoHost       string `json:"mongodb_host,omitempty"`
+	MongoPort       int    `json:"mongodb_port,omitempty"`         // default 27017
+	MongoUser       string `json:"mongodb_user,omitempty"`
+	MongoPassword   string `json:"mongodb_password,omitempty"`     // encrypted at rest; wiped after handshake
+	MongoAuthDB     string `json:"mongodb_auth_db,omitempty"`      // authSource, defaults to "admin"
+	MongoTLS        string `json:"mongodb_tls,omitempty"`          // "require" (default) | "prefer" | "disable"
+	MongoReplicaSet string `json:"mongodb_replica_set,omitempty"`  // optional, surfaced in hello reply
 }
 
 // File holds an encrypted credential file.
@@ -143,17 +162,29 @@ type ServiceInfo struct {
 	SMTPUser string `json:"smtp_user,omitempty"`
 	SMTPTLS  string `json:"smtp_tls,omitempty"`
 
-	// redis / postgres (non-secret)
-	RedisHost     string `json:"redis_host,omitempty"`
-	RedisPort     int    `json:"redis_port,omitempty"`
-	RedisUsername string `json:"redis_username,omitempty"`
-	RedisDB       int    `json:"redis_db,omitempty"`
-	RedisTLS      bool   `json:"redis_tls,omitempty"`
-	PostgresHost  string `json:"postgres_host,omitempty"`
-	PostgresPort  int    `json:"postgres_port,omitempty"`
-	PostgresUser  string `json:"postgres_user,omitempty"`
-	PostgresDB    string `json:"postgres_db,omitempty"`
-	PostgresTLS   string `json:"postgres_tls,omitempty"`
+	// redis / postgres / mongodb (non-secret)
+	RedisHost       string `json:"redis_host,omitempty"`
+	RedisPort       int    `json:"redis_port,omitempty"`
+	RedisUsername   string `json:"redis_username,omitempty"`
+	RedisDB         int    `json:"redis_db,omitempty"`
+	RedisTLS        bool   `json:"redis_tls,omitempty"`
+	PostgresHost    string `json:"postgres_host,omitempty"`
+	PostgresPort    int    `json:"postgres_port,omitempty"`
+	PostgresUser    string `json:"postgres_user,omitempty"`
+	PostgresDB      string `json:"postgres_db,omitempty"`
+	PostgresTLS     string `json:"postgres_tls,omitempty"`
+	MongoHost       string `json:"mongodb_host,omitempty"`
+	MongoPort       int    `json:"mongodb_port,omitempty"`
+	MongoUser       string `json:"mongodb_user,omitempty"`
+	MongoAuthDB     string `json:"mongodb_auth_db,omitempty"`
+	MongoTLS        string `json:"mongodb_tls,omitempty"`
+	MongoReplicaSet string `json:"mongodb_replica_set,omitempty"`
+
+	// apple_jwt (non-secret)
+	AppleKeyID      string `json:"apple_key_id,omitempty"`
+	AppleIssuerID   string `json:"apple_issuer_id,omitempty"`
+	AppleKeyFileRef string `json:"apple_key_file_ref,omitempty"`
+	AppleAudience   string `json:"apple_audience,omitempty"`
 }
 
 // SafeInfo returns a secret-free view of the service.
@@ -205,6 +236,19 @@ func (s *Service) SafeInfo() ServiceInfo {
 		info.PostgresUser = s.Auth.PostgresUser
 		info.PostgresDB = s.Auth.PostgresDB
 		info.PostgresTLS = s.Auth.PostgresTLS
+	case "mongodb":
+		info.MongoHost = s.Auth.MongoHost
+		info.MongoPort = s.Auth.MongoPort
+		info.MongoUser = s.Auth.MongoUser
+		info.MongoAuthDB = s.Auth.MongoAuthDB
+		info.MongoTLS = s.Auth.MongoTLS
+		info.MongoReplicaSet = s.Auth.MongoReplicaSet
+	case "apple_jwt":
+		info.AppleKeyID = s.Auth.AppleKeyID
+		info.AppleIssuerID = s.Auth.AppleIssuerID
+		info.AppleKeyFileRef = s.Auth.AppleKeyFileRef
+		info.AppleAudience = s.Auth.AppleAudience
+		info.ExpiresAt = s.Auth.AppleJWTExpires
 	}
 	if info.ExpiresAt > 0 {
 		info.TokenStatus = TokenStatus(info.ExpiresAt)

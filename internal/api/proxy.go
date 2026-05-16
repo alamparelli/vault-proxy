@@ -198,6 +198,12 @@ func (s *Server) injectAuth(ctx context.Context, req *http.Request, svc *vault.S
 			return fmt.Errorf("service account exchange: %w", err)
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
+	case "apple_jwt":
+		token, err := s.ensureAppleJWT(ctx, svc, false)
+		if err != nil {
+			return fmt.Errorf("apple jwt sign: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
 	case "url":
 		// Token already injected into URL via {token} substitution in proxyHandler.
 		// No header injection needed.
@@ -326,6 +332,49 @@ func (s *Server) ensureServiceAccountToken(ctx context.Context, svc *vault.Servi
 	s.ScheduleTokenRefresh(svc.Name, updatedAuth.SAExpiresAt)
 
 	return result.AccessToken, nil
+}
+
+// ensureAppleJWT returns a valid Apple ASC JWT, re-signing the cached one when
+// it falls within tokenExpiryBuffer of its 20-minute lifetime. Unlike OAuth2
+// and service_account flows there is no upstream exchange — Apple verifies the
+// JWT itself on every request.
+func (s *Server) ensureAppleJWT(ctx context.Context, svc *vault.Service, force bool) (string, error) {
+	if !force && svc.Auth.AppleJWT != "" && svc.Auth.AppleJWTExpires > time.Now().Unix()+tokenExpiryBuffer {
+		return svc.Auth.AppleJWT, nil
+	}
+
+	mu := s.getRefreshLock(svc.Name)
+	mu.Lock()
+	defer mu.Unlock()
+
+	fresh, err := s.store.GetService(svc.Name)
+	if err != nil {
+		return "", err
+	}
+	if !force && fresh.Auth.AppleJWT != "" && fresh.Auth.AppleJWTExpires > time.Now().Unix()+tokenExpiryBuffer {
+		return fresh.Auth.AppleJWT, nil
+	}
+
+	keyFile, err := s.store.GetFile(fresh.Auth.AppleKeyFileRef)
+	if err != nil {
+		return "", fmt.Errorf("load apple key file %q: %w", fresh.Auth.AppleKeyFileRef, err)
+	}
+
+	jwt, expiresAt, err := oauth2.SignAppleJWT(keyFile.Data, fresh.Auth.AppleKeyID, fresh.Auth.AppleIssuerID, fresh.Auth.AppleAudience, time.Now())
+	if err != nil {
+		return "", err
+	}
+
+	updated := fresh.Auth
+	updated.AppleJWT = jwt
+	updated.AppleJWTExpires = expiresAt
+	if err := s.store.UpdateServiceAuth(svc.Name, updated); err != nil {
+		log.Printf("warning: failed to persist apple jwt for %s: %v", svc.Name, err)
+	}
+
+	s.ScheduleTokenRefresh(svc.Name, expiresAt)
+	_ = ctx // signer is CPU-only; no network call to cancel
+	return jwt, nil
 }
 
 // sanitizeURLToken masks the auth token in error strings for url-type services

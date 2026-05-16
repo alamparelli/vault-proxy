@@ -375,6 +375,83 @@ On every proxied request:
 
 ---
 
+## Auth Type: `apple_jwt`
+
+App Store Connect API JWT auth. Apple ships a `.p8` ECDSA P-256 private key,
+a 10-character Key ID, and a UUID Issuer ID. The vault signs an ES256 JWT
+locally and attaches it as `Authorization: Bearer <jwt>` — there is no
+upstream token exchange. JWTs are cached for the full 20-minute window Apple
+allows and re-signed automatically.
+
+### Prerequisites — App Store Connect
+
+1. Go to App Store Connect → **Users and Access** → **Keys**
+2. Generate a new API key (or use an existing one)
+3. Download the `AuthKey_XXXXXXXXXX.p8` file (one-shot — Apple does not let you re-download)
+4. Note the **Key ID** (10 chars, shown next to the key) and the **Issuer ID** (UUID at the top of the page)
+
+### Step 1: Upload the .p8 file
+
+```bash
+curl -X POST http://localhost:8390/files \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
+  -F "name=apple-asc.p8" \
+  -F "file=@/path/to/AuthKey_ABC1234567.p8"
+```
+
+### Step 2: Create the service
+
+```bash
+curl -X POST http://localhost:8390/services \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "app-store-connect",
+    "base_url": "https://api.appstoreconnect.apple.com",
+    "auth": {
+      "type": "apple_jwt",
+      "apple_key_id": "ABC1234567",
+      "apple_issuer_id": "11111111-2222-3333-4444-555555555555",
+      "apple_key_file_ref": "apple-asc.p8"
+    }
+  }'
+```
+
+### Required fields
+
+| Field | Description |
+|-------|-------------|
+| `apple_key_id` | 10-char Key ID from App Store Connect |
+| `apple_issuer_id` | Team Issuer ID (UUID) |
+| `apple_key_file_ref` | Name of the uploaded `.p8` file (must exist in vault files) |
+
+### Optional fields
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `apple_audience` | `appstoreconnect-v1` | Override only when targeting other Apple JWT APIs (DeviceCheck, etc.) |
+
+### Behavior
+
+On every proxied request:
+1. If the cached JWT is still valid (> 30s until expiry), it is reused.
+2. Otherwise, the vault loads the `.p8`, signs a new ES256 JWT with a 20-minute `exp`, persists it, and schedules a proactive refresh at ~90% of remaining lifetime.
+3. `Authorization: Bearer <jwt>` is injected into the upstream request.
+
+The `.p8` never leaves the vault. The caller proxies normal HTTP requests:
+
+```bash
+# List apps under the issuer
+curl http://localhost:8390/proxy/app-store-connect/v1/apps \
+  -H "Authorization: Bearer PROXY_TOKEN"
+
+# Fetch sales reports (vendor number replaces 123456789)
+curl 'http://localhost:8390/proxy/app-store-connect/v1/salesReports?filter[frequency]=DAILY&filter[reportSubType]=SUMMARY&filter[reportType]=SALES&filter[vendorNumber]=123456789&filter[reportDate]=2026-05-10' \
+  -H "Authorization: Bearer PROXY_TOKEN"
+```
+
+---
+
 ## Using the Proxy
 
 Once a service is configured, make requests through the proxy. The vault injects auth automatically.
@@ -419,9 +496,9 @@ For internal services with self-signed certificates, add `tls_skip_verify: true`
 
 ---
 
-## Auth Type: `imap` / `smtp` / `redis` / `postgres`
+## Auth Type: `imap` / `smtp` / `redis` / `postgres` / `mongodb`
 
-These four auth types share the same **auth-only TCP proxy** pattern:
+These five auth types share the same **auth-only TCP proxy** pattern:
 
 1. You store credentials in the vault.
 2. A client asks `POST /{proto}/{name}/session` and receives an ephemeral
@@ -546,6 +623,73 @@ password your client sends is discarded, so configure any value.
 **Constraint:** the local Postgres leg is plaintext on loopback. TLS to the
 local listener is declined (SSLRequest → `N`). TLS to the real upstream is
 enforced by default (`postgres_tls: "require"`).
+
+### MongoDB
+
+```bash
+curl -X POST http://localhost:8390/services \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "analytics-mongo",
+    "auth": {
+      "type": "mongodb",
+      "mongodb_host": "mongo.internal",
+      "mongodb_user": "analytics",
+      "mongodb_password": "s3cret",
+      "mongodb_auth_db": "admin",
+      "mongodb_tls": "require"
+    }
+  }'
+```
+
+Fields:
+
+| Field | Default | Notes |
+|---|---|---|
+| `mongodb_host` | — | required |
+| `mongodb_port` | 27017 | |
+| `mongodb_user` | — | required |
+| `mongodb_password` | — | required; wiped from memory after the handshake |
+| `mongodb_auth_db` | `admin` | The `authSource` for SCRAM authentication |
+| `mongodb_tls` | `require` | `require` / `prefer` / `disable` |
+| `mongodb_replica_set` | — | Optional. Surfaced as `setName` in the synthesised local hello |
+
+Open a session:
+
+```bash
+curl -X POST http://localhost:8390/mongodb/analytics-mongo/session \
+  -H "Authorization: Bearer PROXY_TOKEN"
+# → {"addr":"127.0.0.1:54321","expires_at":"..."}
+```
+
+Connect any MongoDB driver to the returned address **without credentials**.
+The local listener advertises an auth-free standalone server, so the driver
+sends queries directly to the (already-authenticated) upstream:
+
+```python
+from pymongo import MongoClient
+client = MongoClient("mongodb://127.0.0.1:54321/?directConnection=true")
+client.mydb.mycoll.find_one()
+```
+
+```bash
+mongosh "mongodb://127.0.0.1:54321/mydb?directConnection=true"
+```
+
+Use `directConnection=true` to keep the driver from running SDAM topology
+discovery against the synthesised hello (which would otherwise try to talk
+to phantom replica-set members).
+
+**Constraints:**
+
+- MongoDB 4.4+ with SCRAM-SHA-256 only. SCRAM-SHA-1, MONGODB-X509, AWS IAM,
+  and LDAP are not supported.
+- The local listener does not advertise TLS. Upstream TLS is required by
+  default (`mongodb_tls: "require"`).
+- Drivers that aggressively re-issue `hello` against the splice (e.g. for
+  load-balanced topologies) may see slightly inconsistent server descriptors;
+  use `directConnection=true` to disable that path.
 
 ### Security notes
 

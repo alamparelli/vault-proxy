@@ -185,6 +185,13 @@ func (s *Server) validateAuthType(svc *vault.Service) error {
 				return fmt.Errorf("invalid sa_token_url: %w", err)
 			}
 		}
+	case "apple_jwt":
+		if svc.Auth.AppleKeyID == "" || svc.Auth.AppleIssuerID == "" || svc.Auth.AppleKeyFileRef == "" {
+			return fmt.Errorf("apple_jwt requires apple_key_id, apple_issuer_id, and apple_key_file_ref")
+		}
+		if _, err := s.store.GetFile(svc.Auth.AppleKeyFileRef); err != nil {
+			return fmt.Errorf("apple_key_file_ref %q: %w", svc.Auth.AppleKeyFileRef, err)
+		}
 	case "url":
 		if svc.Auth.Token == "" {
 			return fmt.Errorf("url auth requires token")
@@ -293,6 +300,30 @@ func (s *Server) validateAuthType(svc *vault.Service) error {
 		}
 		if err := validateSSHHost(svc.Auth.PostgresHost); err != nil {
 			return fmt.Errorf("invalid postgres_host: %w", err)
+		}
+	case "mongodb":
+		if svc.Auth.MongoHost == "" || svc.Auth.MongoUser == "" || svc.Auth.MongoPassword == "" {
+			return fmt.Errorf("mongodb requires mongodb_host, mongodb_user, and mongodb_password")
+		}
+		if svc.Auth.MongoAuthDB == "" {
+			svc.Auth.MongoAuthDB = "admin"
+		}
+		if svc.Auth.MongoTLS == "" {
+			svc.Auth.MongoTLS = "require"
+		}
+		switch svc.Auth.MongoTLS {
+		case "require", "prefer", "disable":
+		default:
+			return fmt.Errorf("mongodb_tls must be require, prefer, or disable")
+		}
+		if svc.Auth.MongoPort == 0 {
+			svc.Auth.MongoPort = 27017
+		}
+		if err := validatePort(svc.Auth.MongoPort); err != nil {
+			return fmt.Errorf("invalid mongodb_port: %w", err)
+		}
+		if err := validateSSHHost(svc.Auth.MongoHost); err != nil {
+			return fmt.Errorf("invalid mongodb_host: %w", err)
 		}
 	default:
 		return fmt.Errorf("unsupported auth type: %s", svc.Auth.Type)

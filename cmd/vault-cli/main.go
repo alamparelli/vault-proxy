@@ -102,7 +102,7 @@ func main() {
 		}
 	case "ssh":
 		cmdSSH(args)
-	case "imap", "smtp", "redis", "postgres":
+	case "imap", "smtp", "redis", "postgres", "mongodb":
 		cmdTCPSession(cmd, args)
 	case "health":
 		cmdHealth()
@@ -134,6 +134,7 @@ Commands:
   smtp <service>              Open an authenticated SMTP session, print 127.0.0.1:PORT
   redis <service>             Open an authenticated Redis session, print 127.0.0.1:PORT
   postgres <service>          Open an authenticated Postgres session, print 127.0.0.1:PORT
+  mongodb <service>           Open an authenticated MongoDB session, print 127.0.0.1:PORT
   token create [scope]    Create a session token (admin|proxy, default: proxy)
   token list              List active tokens
   token revoke <id>       Revoke a token
@@ -515,7 +516,7 @@ func cmdSSH(args []string) {
 	os.Exit(result.ExitCode)
 }
 
-// cmdTCPSession handles `vault-cli <imap|smtp|redis|postgres> <service>` —
+// cmdTCPSession handles `vault-cli <imap|smtp|redis|postgres|mongodb> <service>` —
 // opens a one-shot authenticated local listener and prints "127.0.0.1:PORT"
 // to stdout. Pipe into any native client pointed at that address.
 func cmdTCPSession(proto string, args []string) {

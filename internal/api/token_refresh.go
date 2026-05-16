@@ -54,6 +54,12 @@ func (s *tokenRefreshScheduler) ScheduleAll() {
 				continue
 			}
 			expiresAt = full.Auth.SAExpiresAt
+		case "apple_jwt":
+			full, err := s.server.store.GetService(svc.Name)
+			if err != nil {
+				continue
+			}
+			expiresAt = full.Auth.AppleJWTExpires
 		default:
 			continue
 		}
@@ -136,6 +142,13 @@ func (s *tokenRefreshScheduler) doRefresh(serviceName string) {
 		if err == nil {
 			if fresh, err2 := s.server.store.GetService(serviceName); err2 == nil {
 				newExpiresAt = fresh.Auth.SAExpiresAt
+			}
+		}
+	case "apple_jwt":
+		_, err = s.server.ensureAppleJWT(ctx, svc, true)
+		if err == nil {
+			if fresh, err2 := s.server.store.GetService(serviceName); err2 == nil {
+				newExpiresAt = fresh.Auth.AppleJWTExpires
 			}
 		}
 	default:
